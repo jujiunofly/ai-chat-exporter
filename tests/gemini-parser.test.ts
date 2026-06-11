@@ -14,9 +14,61 @@ vi.mock('../src/lib/dom-utils', () => ({
   cleanText: (text: string) => text.replace(/\s+/g, ' ').trim()
 }))
 
+// Mock chrome.storage
+const storageData: Record<string, any> = {}
+
+;(globalThis as any).chrome = {
+  storage: {
+    local: {
+      get: vi.fn(async (keys: string | string[]) => {
+        if (typeof keys === 'string') {
+          return { [keys]: storageData[keys] }
+        }
+        const result: Record<string, any> = {}
+        for (const key of keys) {
+          if (storageData[key] !== undefined) {
+            result[key] = storageData[key]
+          }
+        }
+        return result
+      }),
+      set: vi.fn(async (items: Record<string, any>) => {
+        Object.assign(storageData, items)
+      }),
+      remove: vi.fn(async (keys: string | string[]) => {
+        if (typeof keys === 'string') {
+          delete storageData[keys]
+        } else {
+          for (const key of keys) {
+            delete storageData[key]
+          }
+        }
+      }),
+    },
+  },
+  runtime: {
+    getURL: vi.fn((path: string) => `chrome-extension://test/${path}`),
+  },
+  tabs: {
+    sendMessage: vi.fn(),
+  },
+  alarms: {
+    create: vi.fn(),
+    onAlarm: { addListener: vi.fn() },
+  },
+  downloads: {
+    onDeterminingFilename: { addListener: vi.fn() },
+  },
+}
+
 describe('Gemini Parser', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
+    document.title = ''
+    // Clear storage
+    for (const key of Object.keys(storageData)) {
+      delete storageData[key]
+    }
   })
 
   describe('isConversationPage', () => {
@@ -210,6 +262,221 @@ describe('Gemini Parser', () => {
       const content = document.querySelector('.user-query')?.textContent
       expect(content).toContain('Line 1')
       expect(content).toContain('Line 3')
+    })
+  })
+
+  describe('Hook Script Injection', () => {
+    it('should inject hook script element into the page', () => {
+      // Simulate what injectHookScript() does
+      const script = document.createElement('script')
+      script.textContent = `(() => { /* hook code */ })()`
+      script.setAttribute('data-gemini-hook', 'true')
+      document.documentElement.appendChild(script)
+
+      const injected = document.querySelector('script[data-gemini-hook="true"]')
+      expect(injected).not.toBeNull()
+      expect(injected?.getAttribute('data-gemini-hook')).toBe('true')
+    })
+
+    it('should not inject hook script twice', () => {
+      // Simulate injectHookScript with dedup guard
+      function injectHookScript() {
+        if (document.querySelector('script[data-gemini-hook="true"]')) return
+        const script = document.createElement('script')
+        script.setAttribute('data-gemini-hook', 'true')
+        document.documentElement.appendChild(script)
+      }
+
+      // First injection
+      injectHookScript()
+      expect(document.querySelectorAll('script[data-gemini-hook="true"]').length).toBe(1)
+
+      // Second injection should be skipped
+      injectHookScript()
+      expect(document.querySelectorAll('script[data-gemini-hook="true"]').length).toBe(1)
+    })
+  })
+
+  describe('Credential Storage from Hook', () => {
+    it('should store hooked credentials in chrome.storage.local', async () => {
+      const payload = {
+        at: 'test-auth-token',
+        sid: '1234567890',
+        accountSlot: 'default',
+        lastUsed: Date.now()
+      }
+
+      // Simulate what the message listener does
+      const key = payload.sid || 'default'
+      const credentialsMap: Record<string, any> = {}
+      credentialsMap[key] = {
+        at: payload.at,
+        sid: payload.sid,
+        accountSlot: payload.accountSlot,
+        lastUsed: payload.lastUsed
+      }
+
+      await chrome.storage.local.set({
+        gemini_credentials: { at: payload.at, sid: payload.sid },
+        gemini_credentials_map: credentialsMap
+      })
+
+      const stored = await chrome.storage.local.get(['gemini_credentials', 'gemini_credentials_map'])
+      expect(stored.gemini_credentials.at).toBe('test-auth-token')
+      expect(stored.gemini_credentials.sid).toBe('1234567890')
+      expect(stored.gemini_credentials_map['1234567890'].accountSlot).toBe('default')
+    })
+
+    it('should merge credentials for multiple account slots', async () => {
+      // First account
+      await chrome.storage.local.set({
+        gemini_credentials_map: {
+          'session-u0': {
+            at: 'token-u0',
+            sid: 'session-u0',
+            accountSlot: 'u0',
+            lastUsed: Date.now()
+          }
+        }
+      })
+
+      // Second account (simulating merge)
+      const existing = await chrome.storage.local.get(['gemini_credentials_map'])
+      const map = existing.gemini_credentials_map || {}
+      map['session-u1'] = {
+        at: 'token-u1',
+        sid: 'session-u1',
+        accountSlot: 'u1',
+        lastUsed: Date.now()
+      }
+      await chrome.storage.local.set({ gemini_credentials_map: map })
+
+      const stored = await chrome.storage.local.get(['gemini_credentials_map'])
+      expect(Object.keys(stored.gemini_credentials_map)).toHaveLength(2)
+      expect(stored.gemini_credentials_map['session-u0'].at).toBe('token-u0')
+      expect(stored.gemini_credentials_map['session-u1'].at).toBe('token-u1')
+    })
+  })
+
+  describe('Batch Execute URL Construction', () => {
+    it('should construct correct URL with all required params', () => {
+      const rpcids = 'MaZiqc'
+      const sourcePath = '/app'
+      const sessionId = '1234567890'
+      const bl = 'boq_assistant-bard-web-server_20260107.06_p0'
+      const reqid = String(Math.floor(Math.random() * 100000))
+
+      const params = new URLSearchParams({
+        rpcids,
+        'source-path': sourcePath,
+        bl,
+        'f.sid': sessionId,
+        _reqid: reqid,
+        rt: 'c'
+      })
+
+      const url = `https://gemini.google.com/_/BardChatUi/data/batchexecute?${params.toString()}`
+
+      expect(url).toContain('rpcids=MaZiqc')
+      expect(url).toContain('source-path=%2Fapp')
+      expect(url).toContain('f.sid=1234567890')
+      expect(url).toContain('rt=c')
+      expect(url).toContain('bl=boq_assistant-bard-web-server_20260107.06_p0')
+      expect(url).toContain('_reqid=')
+      expect(url).toContain('BardChatUi/data/batchexecute')
+    })
+
+    it('should use source-path=/app not /', () => {
+      const params = new URLSearchParams({
+        rpcids: 'MaZiqc',
+        'source-path': '/app',
+        'f.sid': '123',
+        rt: 'c'
+      })
+
+      expect(params.get('source-path')).toBe('/app')
+    })
+
+    it('should construct correct form body with f.req and at', () => {
+      const requestPayload = JSON.stringify([
+        ['MaZiqc', JSON.stringify([20, null, [0, null, 1]]), null, 'generic']
+      ])
+      const authToken = 'test-auth-token-123'
+
+      const body = new URLSearchParams()
+      body.set('f.req', requestPayload)
+      body.set('at', authToken)
+
+      expect(body.get('f.req')).toBe(requestPayload)
+      expect(body.get('at')).toBe('test-auth-token-123')
+    })
+
+    it('should format request payload correctly for MaZiqc', () => {
+      const nextPageToken = ''
+      const payload = JSON.stringify([
+        ['MaZiqc', JSON.stringify([20, nextPageToken || null, [0, null, 1]]), null, 'generic']
+      ])
+
+      const parsed = JSON.parse(payload)
+      expect(parsed[0][0]).toBe('MaZiqc')
+      expect(parsed[0][2]).toBeNull()
+      expect(parsed[0][3]).toBe('generic')
+
+      const innerParams = JSON.parse(parsed[0][1])
+      expect(innerParams[0]).toBe(20)
+      expect(innerParams[1]).toBeNull() // Empty string becomes null
+      expect(innerParams[2]).toEqual([0, null, 1])
+    })
+
+    it('should format request payload with page token for MaZiqc', () => {
+      const nextPageToken = 'next-page-token-abc'
+      const payload = JSON.stringify([
+        ['MaZiqc', JSON.stringify([20, nextPageToken, [0, null, 1]]), null, 'generic']
+      ])
+
+      const parsed = JSON.parse(payload)
+      const innerParams = JSON.parse(parsed[0][1])
+      expect(innerParams[1]).toBe('next-page-token-abc')
+    })
+
+    it('should format McFRL request payload for conversation detail', () => {
+      const conversationId = 'abc123def456'
+      const payload = JSON.stringify([
+        ['McFRL', JSON.stringify([null, conversationId, null, null, null]), null, 'generic']
+      ])
+
+      const parsed = JSON.parse(payload)
+      expect(parsed[0][0]).toBe('McFRL')
+      const innerParams = JSON.parse(parsed[0][1])
+      expect(innerParams[0]).toBeNull()
+      expect(innerParams[1]).toBe(conversationId)
+    })
+  })
+
+  describe('Account Slot Extraction', () => {
+    it('should extract default slot from path without /u/', () => {
+      // Simulate URL path matching
+      const pathname = '/app/abc123'
+      const matched = pathname.match(/\/u\/(\d+)(?:\/|$)/)
+      expect(matched).toBeNull()
+    })
+
+    it('should extract u0 slot from path', () => {
+      const pathname = '/u/0/app/abc123'
+      const matched = pathname.match(/\/u\/(\d+)(?:\/|$)/)
+      expect(matched?.[1]).toBe('0')
+    })
+
+    it('should extract u1 slot from path', () => {
+      const pathname = '/u/1/app/abc123'
+      const matched = pathname.match(/\/u\/(\d+)(?:\/|$)/)
+      expect(matched?.[1]).toBe('1')
+    })
+
+    it('should format as u0', () => {
+      const matched = '/u/0/app'.match(/\/u\/(\d+)(?:\/|$)/)
+      const slot = matched?.[1] ? `u${matched[1]}` : 'default'
+      expect(slot).toBe('u0')
     })
   })
 })

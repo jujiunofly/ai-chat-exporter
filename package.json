@@ -36,6 +36,12 @@
       "activeTab",
       "downloads",
       "alarms"
+    ],
+    "web_accessible_resources": [
+      {
+        "resources": ["hook-credentials.js"],
+        "matches": ["https://gemini.google.com/*"]
+      }
     ]
   }
 }

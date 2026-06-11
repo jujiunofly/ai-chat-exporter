@@ -1,16 +1,101 @@
 /**
  * Gemini DOM Parser Content Script
  * Parses conversations from gemini.google.com using DOM reading and API-based conversation list
+ *
+ * Authentication Strategy:
+ * - Primary: Hook-script that monkey-patches window.fetch/XHR to intercept `at` (auth token)
+ *   and `f.sid` (session ID) from Gemini's batchexecute requests, then posts them via
+ *   window.postMessage for the content script to store in chrome.storage.local.
+ * - Fallback: __WIZ_global_data, script tags, hidden inputs, meta tags.
  */
 import type { Conversation, ChatMessage, PlatformParser, ConversationListItem } from '../lib/types'
 import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
+
+/**
+ * Hook script code that runs in the PAGE world (not the content script isolated world).
+ * Monkey-patches window.fetch and XMLHttpRequest to intercept Gemini batchexecute requests
+ * and extract auth tokens (at) and session IDs (f.sid).
+ */
+const HOOK_SCRIPT_CODE = `(() => {
+  const result = {}
+
+  const originalFetch = window.fetch
+  window.fetch = async function (...args) {
+    const response = await originalFetch.apply(this, args)
+    try {
+      processRequest(args[0], args[1]?.body?.toString?.())
+    } catch (e) {}
+    return response
+  }
+
+  const originalOpen = XMLHttpRequest.prototype.open
+  const originalSend = XMLHttpRequest.prototype.send
+
+  XMLHttpRequest.prototype.open = function (method, url) {
+    this.__url = url
+    return originalOpen.apply(this, arguments)
+  }
+
+  XMLHttpRequest.prototype.send = function (body) {
+    if (this.__url && this.__url.includes("batchexecute")) {
+      try {
+        processRequest(this.__url, body && body.toString ? body.toString() : null)
+      } catch (e) {}
+    }
+    return originalSend.apply(this, arguments)
+  }
+
+  function getAccountSlot() {
+    try {
+      var matched = window.location.pathname.match(/\\/u\\/(\\d+)(?:\\/|$)/)
+      if (matched && matched[1]) return "u" + matched[1]
+    } catch (e) {}
+    return "default"
+  }
+
+  function processRequest(url, body) {
+    try {
+      var atMatch = body ? body.match(/at=([a-zA-Z0-9%:\\-_]+)/) : null
+      var sidMatch = url ? url.match(/f\\.sid=([0-9]+)/) : null
+
+      if (atMatch || sidMatch) {
+        result.at = atMatch ? decodeURIComponent(atMatch[1]) : result.at
+        result.sid = sidMatch ? sidMatch[1] : result.sid
+        result.accountSlot = getAccountSlot()
+        result.lastUsed = Date.now()
+
+        window.postMessage(
+          { type: "GEMINI_CREDENTIALS", payload: { at: result.at, sid: result.sid, accountSlot: result.accountSlot, lastUsed: result.lastUsed } },
+          "*"
+        )
+      }
+    } catch (e) {}
+  }
+})()`
+
+/**
+ * Inject the hook script into the page world.
+ * The hook patches fetch/XHR and sends credentials back via postMessage.
+ */
+function injectHookScript() {
+  // Avoid injecting twice
+  if (document.querySelector('script[data-gemini-hook="true"]')) return
+
+  const script = document.createElement('script')
+  script.textContent = HOOK_SCRIPT_CODE
+  script.setAttribute('data-gemini-hook', 'true')
+  script.type = 'text/javascript'
+  script.async = false
+  document.documentElement.appendChild(script)
+  script.remove()
+}
 
 /**
  * Gemini parser implementation
  */
 class GeminiParser implements PlatformParser {
   platform = 'gemini' as const
-  
+
   /**
    * Check if current page is a Gemini conversation
    */
@@ -22,7 +107,7 @@ class GeminiParser implements PlatformParser {
       document.querySelector('.user-query, .model-response')
     )
   }
-  
+
   /**
    * Get the conversation title from the page
    * Strategy:
@@ -36,7 +121,7 @@ class GeminiParser implements PlatformParser {
     const pageTitle = document.title
     if (pageTitle) {
       // Gemini formats titles as "Conversation Title - Gemini"
-      const cleaned = pageTitle.replace(/\s*[-–|]\s*Gemini.*$/i, '').trim()
+      const cleaned = pageTitle.replace(/\s*[–|]\s*Gemini.*$/i, '').trim()
       if (cleaned && cleaned !== 'Gemini' && cleaned.length > 0) {
         return cleaned
       }
@@ -50,7 +135,7 @@ class GeminiParser implements PlatformParser {
         return text
       }
     }
-    
+
     // 3. Try first user message as fallback
     const firstUserMsg = document.querySelector('.user-query, [class*="user-message"], [data-message-author-role="user"]')
     if (firstUserMsg) {
@@ -59,21 +144,21 @@ class GeminiParser implements PlatformParser {
         return text.length > 80 ? text.substring(0, 80) + '...' : text
       }
     }
-    
+
     return 'Untitled Conversation'
   }
-  
+
   /**
    * Parse the current conversation from the DOM
    */
   async parseCurrentConversation(): Promise<Conversation | null> {
     try {
       const messages = this.extractMessages()
-      
+
       if (messages.length === 0) {
         return null
       }
-      
+
       return {
         id: generateId(),
         title: this.getConversationTitle(),
@@ -88,11 +173,43 @@ class GeminiParser implements PlatformParser {
   }
 
   /**
-   * Extract the SNlM0e auth token from page scripts.
-   * Gemini stores it in a script tag, not in cookies.
+   * Get the account slot from the URL path (e.g., /u/0/app/...)
    */
-  private getAuthToken(): string | null {
-    // 1. Try window.__WIZ_global_data (most reliable in newer Gemini)
+  private getAccountSlot(): string {
+    try {
+      const matched = window.location.pathname.match(/\/u\/(\d+)(?:\/|$)/)
+      if (matched?.[1]) return `u${matched[1]}`
+    } catch (e) {}
+    return 'default'
+  }
+
+  /**
+   * Extract the auth token. Priority:
+   * 1. Hooked credentials from chrome.storage.local (most reliable)
+   * 2. __WIZ_global_data (fallback)
+   * 3. Script tags (fallback)
+   * 4. Hidden inputs / meta tags (fallback)
+   *
+   * This is async because it reads from chrome.storage.local.
+   */
+  private async getAuthToken(): Promise<string | null> {
+    // 1. Check hooked credentials in storage (most reliable)
+    try {
+      const stored = await chrome.storage.local.get(['gemini_credentials', 'gemini_credentials_map'])
+      const credentials = stored.gemini_credentials
+      const credentialsMap: Record<string, { at?: string; sid?: string; accountSlot?: string; lastUsed?: number }> = stored.gemini_credentials_map || {}
+
+      // Try to find credentials for current account slot
+      const accountSlot = this.getAccountSlot()
+      const slotCreds = Object.values(credentialsMap).find(c => c.accountSlot === accountSlot)
+
+      if (slotCreds?.at) return slotCreds.at
+      if (credentials?.at) return credentials.at
+    } catch (e) {
+      // chrome.storage not available in tests
+    }
+
+    // 2. Fallback: try __WIZ_global_data
     try {
       const wizData = (window as any).__WIZ_global_data
       if (wizData && wizData.SNlM0e) {
@@ -102,7 +219,7 @@ class GeminiParser implements PlatformParser {
       // Not available
     }
 
-    // 2. Try document.cookie for SNlM0e
+    // 3. Try document.cookie for SNlM0e
     try {
       const cookies = document.cookie.split(';')
       for (const cookie of cookies) {
@@ -115,7 +232,7 @@ class GeminiParser implements PlatformParser {
       // Cookies not accessible
     }
 
-    // 3. Try to find the token in page scripts
+    // 4. Try to find the token in page scripts
     const scripts = document.querySelectorAll('script')
     for (const script of scripts) {
       const text = script.textContent || ''
@@ -126,13 +243,13 @@ class GeminiParser implements PlatformParser {
       }
     }
 
-    // 4. Fallback: try to find a hidden input with the token
+    // 5. Fallback: try to find a hidden input with the token
     const input = document.querySelector('input[name="SNlM0e"]') as HTMLInputElement
     if (input) {
       return input.value
     }
 
-    // 5. Fallback: try meta tag
+    // 6. Fallback: try meta tag
     const meta = document.querySelector('meta[name="SNlM0e"]')
     if (meta) {
       return meta.getAttribute('content')
@@ -142,19 +259,93 @@ class GeminiParser implements PlatformParser {
   }
 
   /**
+   * Get session ID from stored hooked credentials.
+   */
+  private async getSessionId(): Promise<string> {
+    try {
+      const stored = await chrome.storage.local.get(['gemini_credentials'])
+      return stored.gemini_credentials?.sid || ''
+    } catch {
+      return ''
+    }
+  }
+
+  /**
+   * Build the correct URL params for Gemini batchexecute API.
+   */
+  private buildBatchExecuteUrl(
+    rpcids: string,
+    sourcePath: string,
+    sessionId: string
+  ): string {
+    const params = new URLSearchParams({
+      rpcids,
+      'source-path': sourcePath,
+      bl: 'boq_assistant-bard-web-server_20260107.06_p0',
+      'f.sid': sessionId,
+      _reqid: String(Math.floor(Math.random() * 100000)),
+      rt: 'c'
+    })
+    return `https://gemini.google.com/_/BardChatUi/data/batchexecute?${params.toString()}`
+  }
+
+  /**
+   * Build the form body for a batchexecute request.
+   */
+  private buildBatchExecuteBody(requestPayload: string, authToken: string): string {
+    const body = new URLSearchParams()
+    body.set('f.req', requestPayload)
+    body.set('at', authToken)
+    return body.toString()
+  }
+
+  /**
+   * Make a batchexecute API call with proper auth and request format.
+   */
+  private async makeBatchExecuteCall(
+    rpcids: string,
+    sourcePath: string,
+    requestPayload: string,
+    authToken: string,
+    sessionId: string
+  ): Promise<string | null> {
+    const url = this.buildBatchExecuteUrl(rpcids, sourcePath, sessionId)
+    const body = this.buildBatchExecuteBody(requestPayload, authToken)
+
+    const response = await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body
+    })
+
+    if (!response.ok) {
+      console.error(`[Gemini Parser] API error: ${response.status}`)
+      return null
+    }
+
+    return response.text()
+  }
+
+  /**
    * Fetch ALL conversations via Gemini's batchexecute API.
-   * Uses the correct RPC ID 'MaZiqc' and proper request format.
+   * Uses the correct RPC ID 'MaZiqc' and proper request format matching the original extension.
    */
   async fetchAllConversations(): Promise<ConversationListItem[]> {
     const conversations: ConversationListItem[] = []
-    
+
     try {
-      // Get the SNlM0e auth token
-      const authToken = this.getAuthToken()
+      // Get the auth token (async — reads from chrome.storage.local first)
+      const authToken = await this.getAuthToken()
       if (!authToken) {
         console.error('[Gemini Parser] Could not find auth token')
         return this.getConversationList() // Fall back to DOM
       }
+
+      // Get session ID from stored hooked credentials
+      const sessionId = await this.getSessionId()
 
       let nextPageToken: string = ''
       let hasMore = true
@@ -164,40 +355,28 @@ class GeminiParser implements PlatformParser {
       while (hasMore) {
         try {
           // Use the correct RPC ID 'MaZiqc' and request format
-          // Format: [["MaZiqc", JSON.stringify([20, pageToken, [0,null,1]]), null, "generic"]]
+          // Format: [[\"MaZiqc\", JSON.stringify([20, pageToken, [0,null,1]]), null, \"generic\"]]
           const requestPayload = JSON.stringify([
-            ['MaZiqc', JSON.stringify([20, nextPageToken || '', [0, null, 1]]), null, 'generic']
+            ['MaZiqc', JSON.stringify([20, nextPageToken || null, [0, null, 1]]), null, 'generic']
           ])
 
-          const response = await fetch(
-            `https://gemini.google.com/_/BardChatUi/data/batchexecute?rpcids=MaZiqc&source-path=/&hl=en`,
-            {
-              method: 'POST',
-              credentials: 'include',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-              },
-              body: `f.req=${encodeURIComponent(requestPayload)}&at=${encodeURIComponent(authToken)}&`
-            }
+          const text = await this.makeBatchExecuteCall(
+            'MaZiqc',
+            '/app',
+            requestPayload,
+            authToken,
+            sessionId
           )
 
-          if (response.status === 401 || response.status === 403) {
+          if (!text) {
             if (retries < maxRetries) {
               retries++
               await new Promise(r => setTimeout(r, 1000))
               continue
             }
-            console.error('[Gemini Parser] Authentication expired')
             break
           }
 
-          if (!response.ok) {
-            console.error(`[Gemini Parser] API error: ${response.status}`)
-            break
-          }
-
-          const text = await response.text()
-          
           // Parse the response — each payload line starts with a number, then JSON
           const lines = text.split('\n')
           let parsed = false
@@ -257,12 +436,12 @@ class GeminiParser implements PlatformParser {
    */
   private parseBatchResponse(data: any[]): ConversationListItem[] {
     const items: ConversationListItem[] = []
-    
+
     try {
       // The response structure varies, try to find conversation entries
       const findConversations = (obj: any): void => {
         if (!obj || typeof obj !== 'object') return
-        
+
         if (Array.isArray(obj)) {
           // Look for arrays that contain conversation-like data
           for (const item of obj) {
@@ -287,12 +466,12 @@ class GeminiParser implements PlatformParser {
           }
         }
       }
-      
+
       findConversations(data)
     } catch {
       // Parsing failed
     }
-    
+
     return items
   }
 
@@ -302,38 +481,34 @@ class GeminiParser implements PlatformParser {
    */
   async fetchConversationDetail(id: string): Promise<Conversation | null> {
     try {
-      const authToken = this.getAuthToken()
+      const authToken = await this.getAuthToken()
       if (!authToken) {
         console.error('[Gemini Parser] Could not find auth token for detail fetch')
         return null
       }
 
+      const sessionId = await this.getSessionId()
+
       // Use batchexecute to fetch conversation detail
       // RPC ID for conversation detail is typically 'McFRL' or similar
-      // Format: [["McFRL", JSON.stringify([null, id, null, null, null]), null, "generic"]]
+      // Format: [[\"McFRL\", JSON.stringify([null, id, null, null, null]), null, \"generic\"]]
       const requestPayload = JSON.stringify([
         ['McFRL', JSON.stringify([null, id, null, null, null]), null, 'generic']
       ])
 
-      const response = await fetch(
-        `https://gemini.google.com/_/BardChatUi/data/batchexecute?rpcids=McFRL&source-path=/app/${id}&hl=en`,
-        {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: `f.req=${encodeURIComponent(requestPayload)}&at=${encodeURIComponent(authToken)}&`
-        }
+      const text = await this.makeBatchExecuteCall(
+        'McFRL',
+        `/app/${id}`,
+        requestPayload,
+        authToken,
+        sessionId
       )
 
-      if (!response.ok) {
-        console.error(`[Gemini Parser] Failed to fetch conversation ${id}: ${response.status}`)
+      if (!text) {
+        console.error(`[Gemini Parser] Failed to fetch conversation ${id}`)
         return null
       }
 
-      const text = await response.text()
-      
       // Parse the response to extract messages
       const messages: ChatMessage[] = []
       const lines = text.split('\n')
@@ -356,7 +531,7 @@ class GeminiParser implements PlatformParser {
       let title = 'Untitled Conversation'
       const pageTitle = document.title
       if (pageTitle) {
-        const cleaned = pageTitle.replace(/\s*[-–|]\s*Gemini.*$/i, '').trim()
+        const cleaned = pageTitle.replace(/\s*[–|]\s*Gemini.*$/i, '').trim()
         if (cleaned && cleaned !== 'Gemini') {
           title = cleaned
         }
@@ -406,7 +581,7 @@ class GeminiParser implements PlatformParser {
       }
     }
   }
-  
+
   /**
    * Extract all messages from the conversation DOM
    * Uses a single pass with deduplication to avoid counting messages twice
@@ -414,7 +589,7 @@ class GeminiParser implements PlatformParser {
   private extractMessages(): ChatMessage[] {
     const messages: ChatMessage[] = []
     const seenElements = new Set<Element>()
-    
+
     // First, try to find turn containers (single reliable selector approach)
     // Gemini uses turn-based containers. Try common patterns.
     const turnSelectors = [
@@ -467,13 +642,13 @@ class GeminiParser implements PlatformParser {
         '[class*="response"]',
         '[class*="content"]'
       ]
-      
+
       for (const selector of allMessageSelectors) {
         document.querySelectorAll(selector).forEach(element => {
           if (seenElements.has(element)) return
           seenElements.add(element)
-          
-          const isUser = /query|user/i.test(element.className) || 
+
+          const isUser = /query|user/i.test(element.className) ||
                          element.getAttribute('data-message-author-role') === 'user'
           const role: ChatMessage['role'] = isUser ? 'user' : 'assistant'
           const message = this.parseMessageElement(element, role)
@@ -483,11 +658,11 @@ class GeminiParser implements PlatformParser {
         })
       }
     }
-    
+
     // querySelectorAll already returns elements in DOM order — no sort needed
     return messages
   }
-  
+
   /**
    * Parse a message element
    */
@@ -495,26 +670,26 @@ class GeminiParser implements PlatformParser {
     const contentElement = element.querySelector(
       '[class*="content"], [class*="text"], .markdown'
     ) || element
-    
+
     const content = this.extractMessageContent(contentElement)
-    
+
     if (!content.trim()) {
       return null
     }
-    
+
     const codeBlocks = extractCodeBlocks(contentElement)
-    
+
     const imageData = extractImages(contentElement)
     const attachments = imageData.map(img => ({
       type: 'image' as const,
       url: img.url,
       name: img.alt
     }))
-    
-    const messageId = element.getAttribute('data-message-id') || 
-                     element.id || 
+
+    const messageId = element.getAttribute('data-message-id') ||
+                     element.id ||
                      generateId()
-    
+
     return {
       id: messageId,
       role,
@@ -523,13 +698,13 @@ class GeminiParser implements PlatformParser {
       codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined
     }
   }
-  
+
   /**
    * Extract clean content from a message element
    */
   private extractMessageContent(element: Element): string {
     const clone = element.cloneNode(true) as Element
-    
+
     const removeSelectors = [
       'button',
       '[class*="toolbar"]',
@@ -538,15 +713,15 @@ class GeminiParser implements PlatformParser {
       '[class*="share"]',
       '[class*="menu"]'
     ]
-    
+
     removeSelectors.forEach(selector => {
       clone.querySelectorAll(selector).forEach(el => el.remove())
     })
-    
+
     let content = ''
-    
+
     const textElements = clone.querySelectorAll('p, div, span, li')
-    
+
     if (textElements.length > 0) {
       const textParts: string[] = []
       textElements.forEach(el => {
@@ -559,12 +734,12 @@ class GeminiParser implements PlatformParser {
     } else {
       content = clone.textContent || ''
     }
-    
+
     return cleanText(content)
   }
-  
+
   // getElementPosition removed — querySelectorAll already returns DOM order
-  
+
   /**
    * Extract conversation creation timestamp
    */
@@ -581,14 +756,14 @@ class GeminiParser implements PlatformParser {
     }
     return undefined
   }
-  
+
   /**
    * Get list of conversations from the sidebar (DOM-based, limited to visible items)
    */
   getConversationList(): ConversationListItem[] {
     const conversations: ConversationListItem[] = []
     const seen = new Set<string>()
-    
+
     const selectors = [
       'nav a[href*="/app/"]',
       'aside a[href*="/app/"]',
@@ -596,22 +771,22 @@ class GeminiParser implements PlatformParser {
       '[class*="history"] a[href*="/app/"]',
       'a[href^="/app/"]'
     ]
-    
+
     for (const selector of selectors) {
       const links = document.querySelectorAll(selector)
-      
+
       links.forEach(link => {
         const href = link.getAttribute('href')
         if (!href) return
-        
+
         const match = href.match(/\/app\/([a-f0-9]+)/)
         if (!match) return
-        
+
         const id = match[1]
         if (seen.has(id)) return
-        
+
         const title = extractTextContent(link) || 'Untitled Conversation'
-        
+
         seen.add(id)
         conversations.push({
           id,
@@ -620,10 +795,10 @@ class GeminiParser implements PlatformParser {
           platform: 'gemini'
         })
       })
-      
+
       if (conversations.length > 0) break
     }
-    
+
     return conversations
   }
 }
@@ -635,6 +810,39 @@ const parser = new GeminiParser()
 export const config = {
   matches: ['https://gemini.google.com/*']
 }
+
+// Listen for credentials from hook script (page world -> content script world)
+window.addEventListener('message', async (event) => {
+  if (event.source === window && event.data?.type === 'GEMINI_CREDENTIALS') {
+    const { at, sid, accountSlot, lastUsed } = event.data.payload
+    if (at || sid) {
+      try {
+        // Get existing map to merge
+        const existing = await chrome.storage.local.get(['gemini_credentials_map'])
+        const credentialsMap = existing.gemini_credentials_map || {}
+
+        // Update the map with new credentials for this session
+        const key = sid || 'default'
+        credentialsMap[key] = {
+          at,
+          sid,
+          accountSlot,
+          lastUsed: lastUsed || Date.now()
+        }
+
+        await chrome.storage.local.set({
+          gemini_credentials: { at, sid },
+          gemini_credentials_map: credentialsMap
+        })
+      } catch (e) {
+        // Storage may not be available in some contexts
+      }
+    }
+  }
+})
+
+// Inject hook script into the page world for credential extraction
+injectHookScript()
 
 // Main function to run when script loads
 async function main() {
@@ -658,7 +866,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })
     return true
   }
-  
+
   if (message.type === 'DETECT_PLATFORM') {
     sendResponse({
       data: {
@@ -668,7 +876,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
     })
   }
-  
+
   if (message.type === 'FETCH_CONVERSATION_LIST') {
     try {
       const list = parser.getConversationList()

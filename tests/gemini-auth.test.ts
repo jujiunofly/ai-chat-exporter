@@ -1,17 +1,40 @@
 /**
  * Gemini Auth Token Extraction Tests
- * Tests for SNlM0e token extraction from various sources
+ * Tests for the new hook-based credential approach and fallback token extraction
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock chrome.storage
+const storageData: Record<string, any> = {}
+
 ;(globalThis as any).chrome = {
   storage: {
-    sync: {
-      get: vi.fn(),
-      set: vi.fn(),
-      remove: vi.fn(),
+    local: {
+      get: vi.fn(async (keys: string | string[]) => {
+        if (typeof keys === 'string') {
+          return { [keys]: storageData[keys] }
+        }
+        const result: Record<string, any> = {}
+        for (const key of keys) {
+          if (storageData[key] !== undefined) {
+            result[key] = storageData[key]
+          }
+        }
+        return result
+      }),
+      set: vi.fn(async (items: Record<string, any>) => {
+        Object.assign(storageData, items)
+      }),
+      remove: vi.fn(async (keys: string | string[]) => {
+        if (typeof keys === 'string') {
+          delete storageData[keys]
+        } else {
+          for (const key of keys) {
+            delete storageData[key]
+          }
+        }
+      }),
     },
   },
 }
@@ -22,9 +45,85 @@ describe('Gemini Auth Token Extraction', () => {
     document.body.innerHTML = ''
     // Reset window.__WIZ_global_data
     delete (window as any).__WIZ_global_data
+    // Clear storage
+    for (const key of Object.keys(storageData)) {
+      delete storageData[key]
+    }
   })
 
-  describe('Token from __WIZ_global_data', () => {
+  describe('Hook-based credentials (highest priority)', () => {
+    it('should find token from hooked credentials for current account slot', async () => {
+      storageData['gemini_credentials_map'] = {
+        'session-1': {
+          at: 'hooked-token-abc',
+          sid: 'session-1',
+          accountSlot: 'default',
+          lastUsed: Date.now()
+        }
+      }
+
+      const stored = await chrome.storage.local.get(['gemini_credentials', 'gemini_credentials_map'])
+      const credentials = stored.gemini_credentials
+      const credentialsMap = stored.gemini_credentials_map || {}
+
+      const accountSlot = 'default'
+      const slotCreds = Object.values(credentialsMap).find(
+        (c: any) => c.accountSlot === accountSlot
+      )
+
+      expect(slotCreds).toBeDefined()
+      expect((slotCreds as any).at).toBe('hooked-token-abc')
+    })
+
+    it('should find token for specific account slot u0', async () => {
+      storageData['gemini_credentials_map'] = {
+        'session-u0': {
+          at: 'hooked-token-u0',
+          sid: 'session-u0',
+          accountSlot: 'u0',
+          lastUsed: Date.now()
+        },
+        'session-u1': {
+          at: 'hooked-token-u1',
+          sid: 'session-u1',
+          accountSlot: 'u1',
+          lastUsed: Date.now()
+        }
+      }
+
+      const stored = await chrome.storage.local.get(['gemini_credentials_map'])
+      const credentialsMap = stored.gemini_credentials_map || {}
+
+      const accountSlot = 'u0'
+      const slotCreds = Object.values(credentialsMap).find(
+        (c: any) => c.accountSlot === accountSlot
+      )
+
+      expect(slotCreds).toBeDefined()
+      expect((slotCreds as any).at).toBe('hooked-token-u0')
+      expect((slotCreds as any).sid).toBe('session-u0')
+    })
+
+    it('should fall back to gemini_credentials if slot not found', async () => {
+      storageData['gemini_credentials'] = {
+        at: 'fallback-token',
+        sid: 'fallback-sid'
+      }
+
+      const stored = await chrome.storage.local.get(['gemini_credentials'])
+      const credentials = stored.gemini_credentials
+
+      expect(credentials.at).toBe('fallback-token')
+    })
+
+    it('should return null when no hooked credentials exist', async () => {
+      const stored = await chrome.storage.local.get(['gemini_credentials', 'gemini_credentials_map'])
+      expect(stored.gemini_credentials).toBeUndefined()
+      expect(stored.gemini_credentials_map).toBeUndefined()
+    })
+  })
+
+  describe('Token from __WIZ_global_data (fallback)', () => {
     it('should extract SNlM0e from window.__WIZ_global_data', () => {
       ;(window as any).__WIZ_global_data = {
         SNlM0e: 'wiz-global-data-token-abc123',
@@ -52,7 +151,7 @@ describe('Gemini Auth Token Extraction', () => {
     })
   })
 
-  describe('Token from script tags', () => {
+  describe('Token from script tags (fallback)', () => {
     it('should extract SNlM0e from script tag content', () => {
       document.body.innerHTML = `
         <script>
@@ -122,7 +221,7 @@ describe('Gemini Auth Token Extraction', () => {
     })
   })
 
-  describe('Token from hidden input', () => {
+  describe('Token from hidden input (fallback)', () => {
     it('should extract SNlM0e from hidden input', () => {
       document.body.innerHTML = `
         <input type="hidden" name="SNlM0e" value="hidden-input-token-456" />
@@ -141,7 +240,7 @@ describe('Gemini Auth Token Extraction', () => {
     })
   })
 
-  describe('Token from meta tag', () => {
+  describe('Token from meta tag (fallback)', () => {
     it('should extract SNlM0e from meta tag', () => {
       document.body.innerHTML = `
         <meta name="SNlM0e" content="meta-tag-token-789" />
@@ -161,60 +260,61 @@ describe('Gemini Auth Token Extraction', () => {
   })
 
   describe('Token priority', () => {
-    it('should prefer __WIZ_global_data over script tags', () => {
+    it('should prefer hooked credentials over __WIZ_global_data', async () => {
+      storageData['gemini_credentials_map'] = {
+        'default': {
+          at: 'hooked-wins',
+          sid: 'default',
+          accountSlot: 'default',
+          lastUsed: Date.now()
+        }
+      }
+      ;(window as any).__WIZ_global_data = {
+        SNlM0e: 'wiz-data-loses',
+      }
+
+      // Simulate priority: hooked credentials first
+      const stored = await chrome.storage.local.get(['gemini_credentials_map'])
+      const credentialsMap = stored.gemini_credentials_map || {}
+      const slotCreds = Object.values(credentialsMap).find(
+        (c: any) => c.accountSlot === 'default'
+      )
+
+      let found = null
+      if ((slotCreds as any)?.at) {
+        found = (slotCreds as any).at
+      }
+
+      expect(found).toBe('hooked-wins')
+    })
+
+    it('should fall back to __WIZ_global_data when no hooked credentials', async () => {
+      delete storageData['gemini_credentials_map']
       ;(window as any).__WIZ_global_data = {
         SNlM0e: 'wiz-data-wins',
       }
 
-      document.body.innerHTML = `
-        <script>
-          {"SNlM0e":"script-loses"}
-        </script>
-      `
+      const stored = await chrome.storage.local.get(['gemini_credentials_map'])
+      const credentialsMap = stored.gemini_credentials_map || {}
+      const slotCreds = Object.values(credentialsMap).find(
+        (c: any) => c.accountSlot === 'default'
+      )
 
-      // Simulate priority order: 1. __WIZ_global_data, 2. cookie, 3. script, 4. input, 5. meta
       let found = null
+      if ((slotCreds as any)?.at) {
+        found = (slotCreds as any).at
+      }
 
-      // 1. Try __WIZ_global_data
+      // No hooked credentials
+      expect(found).toBeNull()
+
+      // Fall back to __WIZ_global_data
       const wizData = (window as any).__WIZ_global_data
       if (wizData?.SNlM0e) {
         found = wizData.SNlM0e
       }
 
       expect(found).toBe('wiz-data-wins')
-    })
-
-    it('should fall back to script tags when __WIZ_global_data unavailable', () => {
-      delete (window as any).__WIZ_global_data
-
-      document.body.innerHTML = `
-        <script>
-          {"SNlM0e":"script-wins"}
-        </script>
-      `
-
-      let found = null
-
-      // 1. Try __WIZ_global_data
-      const wizData = (window as any).__WIZ_global_data
-      if (wizData?.SNlM0e) {
-        found = wizData.SNlM0e
-      }
-
-      // 2. Try script tags
-      if (!found) {
-        const scripts = document.querySelectorAll('script')
-        for (const script of scripts) {
-          const text = script.textContent || ''
-          const match = text.match(/"SNlM0e"\s*:\s*"([^"]+)"/)
-          if (match) {
-            found = match[1]
-            break
-          }
-        }
-      }
-
-      expect(found).toBe('script-wins')
     })
   })
 })
