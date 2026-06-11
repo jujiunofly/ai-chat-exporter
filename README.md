@@ -1,95 +1,158 @@
+<div align="center">
+
 # AI Chat Exporter
 
-A Chrome extension that exports conversations from ChatGPT and Gemini to PDF and Markdown files. Built with the Plasmo framework and TypeScript.
+**Export your ChatGPT & Gemini conversations to beautifully formatted files.**
+
+[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue?logo=googlechrome&logoColor=white)](https://github.com/pinguarmy/ai-chat-exporter)
+[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Plasmo](https://img.shields.io/badge/Built_with-Plasmo-purple.svg)](https://plasmo.com)
+
+<br/>
+
+One-click export. Bulk download. Custom filenames. Beautiful output.
+
+[Install](#installation) · [Features](#features) · [Usage](#usage) · [Development](#development)
+
+</div>
+
+---
+
+## Why?
+
+ChatGPT and Gemini don't let you export your conversations in a clean, portable format. Your conversations are trapped inside their platforms. **AI Chat Exporter** fixes that.
+
+Export any conversation to **PDF** or **Markdown** with proper formatting, code blocks, images, and metadata. Perfect for:
+
+- **Archiving** important conversations before they get deleted
+- **Sharing** AI-generated content with colleagues or classmates
+- **Building a personal knowledge base** from your best AI interactions
+- **Migrating** conversations between platforms
+- **Printing** long research sessions or coding tutorials
 
 ## Features
 
-- **Multi-Platform Support**: Export from both ChatGPT and Gemini
-- **Multiple Formats**: Save as PDF or Markdown
-- **Rich Content**: Preserves code blocks, images, and links
-- **Batch Export**: Export multiple conversations at once
-- **Clean Output**: Well-formatted documents ready for sharing or archiving
-- **Customizable Options**: Configure what content to include
-- **Open Source**: MIT licensed, community contributions welcome
+| Feature | Description |
+|---------|-------------|
+| **Multi-Platform** | Works on both ChatGPT and Gemini — detect and export from either |
+| **PDF Export** | Clean, print-ready PDF with proper page breaks and typography |
+| **Markdown Export** | Structured `.md` files with code blocks, headers, and formatting |
+| **Bulk Export** | Fetch ALL your conversations via API and export multiple at once |
+| **Custom Filenames** | Template system with `{date}`, `{title}`, `{platform}`, `{conv_date}` |
+| **Auto-Download** | No save dialogs — files go straight to your configured folder |
+| **Organized Folders** | Auto-sort exports into `ChatGPT/` or `Gemini/` subfolders |
+| **Dark Mode** | Full light/dark theme support via CSS custom properties |
+| **Zero Tracking** | No analytics, no accounts, no data leaves your browser |
+| **Open Source** | MIT licensed — inspect, fork, and contribute |
 
 ## Installation
 
-### From Source (Development)
+### From Source (2 minutes)
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/your-username/ai-chat-exporter.git
-   cd ai-chat-exporter
-   ```
+```bash
+# Clone
+git clone https://github.com/pinguarmy/ai-chat-exporter.git
+cd ai-chat-exporter
 
-2. Install dependencies:
-   ```bash
-   pnpm install
-   ```
+# Install
+npm install
 
-3. Build the extension:
-   ```bash
-   pnpm build
-   ```
+# Build
+npx plasmo build
 
-4. Load in Chrome:
-   - Open Chrome and navigate to `chrome://extensions/`
-   - Enable "Developer mode"
-   - Click "Load unpacked"
-   - Select the `build` folder from the project
+# Load in Chrome:
+# 1. Open chrome://extensions/
+# 2. Enable "Developer mode" (top right)
+# 3. Click "Load unpacked"
+# 4. Select the build/chrome-mv3-prod/ folder
+```
 
-### Chrome Web Store (Coming Soon)
+### Chrome Web Store
 
-The extension will be available on the Chrome Web Store. Stay tuned!
+*Coming soon — star the repo to get notified!*
 
 ## Usage
 
-1. **Navigate to a conversation** on ChatGPT (chatgpt.com) or Gemini (gemini.google.com)
+### Export Current Conversation
 
-2. **Click the extension icon** in your browser toolbar
+1. Open any conversation on **ChatGPT** or **Gemini**
+2. Click the **AI Chat Exporter** icon in your toolbar
+3. Choose **PDF** or **Markdown**
+4. Click **Export** — file downloads automatically
 
-3. **Select export format** (PDF or Markdown)
+### Bulk Export
 
-4. **Click Export** to download the conversation
+1. Navigate to ChatGPT or Gemini
+2. Click the extension icon → **Bulk** tab
+3. Wait for conversations to load (uses API — gets ALL, not just visible)
+4. Select conversations with checkboxes
+5. Click **Export Selected**
 
-### Options
+### Custom Filenames
 
-Access extension options by clicking the gear icon in the popup:
+Configure filename patterns in Settings:
 
-- **Default Format**: Set your preferred export format
-- **Include Metadata**: Add timestamp and conversation info
-- **Include Code Blocks**: Preserve formatted code
-- **Include Images**: Embed or reference images
-- **Theme**: Choose light or dark mode for the interface
+| Token | Output | Example |
+|-------|--------|---------|
+| `{date}` | Current date | `2026-06-11` |
+| `{conv_date}` | Conversation start date | `2026-06-08` |
+| `{title}` | Session title | `how-to-learn-python` |
+| `{platform}` | Platform name | `chatgpt` |
+| `{index}` | Number (bulk) | `001` |
+| `{msgcount}` | Message count | `24` |
 
-## Screenshots
+Default pattern: `{conv_date}-{title}` → `2026-06-08-how-to-learn-python.pdf`
 
-*[Screenshots coming soon]*
+### Download Folders
+
+Choose where files are saved in Settings:
+
+- **Default** → `Downloads/` root
+- **By Platform** → `Downloads/ChatGPT/` or `Downloads/Gemini/`
+- **Custom** → Any folder name you choose
+
+## How It Works
+
+```
+┌─────────────┐     ┌──────────────┐     ┌───────────────┐
+│  Content     │────▶│  DOM Parser  │────▶│  Conversation │
+│  Script      │     │  (messages)  │     │  Object       │
+└─────────────┘     └──────────────┘     └───────┬───────┘
+                                                  │
+┌─────────────┐     ┌──────────────┐              ▼
+│  Hook        │────▶│  Credential  │     ┌───────────────┐
+│  Script      │     │  Capture     │     │  Export Engine │
+└─────────────┘     └──────────────┘     │  (PDF / MD)   │
+                                          └───────┬───────┘
+                                                  │
+                                                  ▼
+                                          ┌───────────────┐
+                                          │  Download      │
+                                          │  (auto-save)   │
+                                          └───────────────┘
+```
+
+- **Content scripts** parse conversations from the page DOM
+- **Hook script** intercepts API calls to capture auth credentials
+- **API fetcher** retrieves full conversation list with pagination
+- **Export engine** converts to PDF (html2canvas + jsPDF) or Markdown
+- **Auto-download** saves to configured folder without prompts
 
 ## Development
 
-### Prerequisites
-
-- Node.js 18+
-- pnpm (recommended) or npm
-
-### Setup
-
 ```bash
-# Install dependencies
-pnpm install
+# Install
+npm install
 
-# Start development server
-pnpm dev
+# Development mode (watch + hot reload)
+npx plasmo dev
 
-# Build for production
-pnpm build
+# Run tests (231 tests)
+npm test
 
-# Run tests
-pnpm test
-
-# Type check
-pnpm lint
+# Production build
+npx plasmo build
 ```
 
 ### Project Structure
@@ -97,56 +160,78 @@ pnpm lint
 ```
 ai-chat-exporter/
 ├── src/
-│   ├── popup.tsx           # Extension popup UI
-│   ├── options.tsx         # Settings page
-│   ├── background.ts      # Service worker
-│   ├── contents/          # Content scripts for each platform
-│   ├── lib/               # Shared utilities and types
-│   ├── components/        # Reusable React components
-│   ├── styles/            # CSS styles
-│   └── tabs/              # Additional pages
-├── tests/                 # Test files
-├── icons/                 # Extension icons
+│   ├── popup.tsx              # Main UI (Current + Bulk tabs)
+│   ├── options.tsx            # Settings page
+│   ├── background.ts          # Service worker
+│   ├── contents/
+│   │   ├── chatgpt-parser.ts  # ChatGPT DOM + API parser
+│   │   └── gemini-parser.ts   # Gemini DOM + API parser
+│   ├── lib/
+│   │   ├── types.ts           # TypeScript interfaces
+│   │   ├── export-markdown.ts # Markdown generator
+│   │   ├── export-pdf.ts      # PDF generator
+│   │   ├── filename.ts        # Filename templates
+│   │   └── dom-utils.ts       # DOM helpers
+│   ├── components/            # React UI components
+│   ├── styles/                # CSS (Gemini design system)
+│   └── tabs/                  # Preview page
+├── tests/                     # 231 tests (Vitest + jsdom)
+├── GUIDE.md                   # Full development guide
 └── package.json
 ```
 
 ### Testing
 
-Tests are written using Vitest with jsdom environment:
-
 ```bash
-# Run all tests
-pnpm test
-
-# Run tests in watch mode
-pnpm test:watch
+npm test                # Run all 231 tests
+npx vitest run          # Same
+npx vitest watch        # Watch mode
 ```
 
 ## Contributing
 
-Contributions are welcome! Please follow these steps:
+Contributions welcome! Here's how:
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+1. **Fork** the repository
+2. **Create** a feature branch (`git checkout -b feature/awesome`)
+3. **Commit** your changes (`git commit -m 'Add awesome feature'`)
+4. **Push** to the branch (`git push origin feature/awesome`)
+5. **Open** a Pull Request
 
-Please ensure:
-- Code follows TypeScript best practices
-- Tests are added for new features
-- Documentation is updated as needed
+### Good First Issues
+
+- Add Firefox support (Manifest V2 compatibility)
+- Add conversation search/filter in bulk mode
+- Add HTML export format
+- Add Notion/Obsidian integration
+- Improve PDF styling with syntax highlighting
+
+## Privacy
+
+This extension:
+
+- ✅ Runs entirely in your browser
+- ✅ Sends NO data to any server
+- ✅ Uses NO analytics or tracking
+- ✅ Stores settings locally in chrome.storage
+- ✅ Source code is fully auditable
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Disclaimer
-
-This extension is not affiliated with, endorsed by, or connected to OpenAI (ChatGPT) or Google (Gemini). It reads publicly visible DOM content from these services. Users are responsible for complying with the terms of service of these platforms.
+[MIT](LICENSE) — use it however you want.
 
 ## Acknowledgments
 
-- Built with [Plasmo](https://www.plasmo.com/) framework
-- React for the user interface
-- TypeScript for type safety
+- Built with [Plasmo](https://plasmo.com/) — the browser extension framework
+- UI design inspired by [Linear](https://linear.app/) and [Notion](https://notion.so/)
+- PDF generation via [jsPDF](https://github.com/parallax/jsPDF) + [html2canvas](https://github.com/niklasvh/html2canvas)
+
+---
+
+<div align="center">
+
+**Made with ❤️ by [pinguarmy](https://github.com/pinguarmy)**
+
+If this saved you time, give it a ⭐ — it helps others find it.
+
+</div>
