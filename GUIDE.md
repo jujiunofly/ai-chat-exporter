@@ -105,9 +105,12 @@ For bulk export, DOM-only only sees ~20 sidebar items. API approach fetches ALL:
 
 ### 5. Filename Templates
 Pattern string with `{variable}` tokens:
-- `{date}` → 2026-06-11
-- `{datetime}` → 2026-06-11T143022
-- `{title}` → my-conversation-title (sanitized)
+- `{date}` → 2026-06-11 (export/current date)
+- `{datetime}` → 2026-06-11T143022 (export/current date+time)
+- `{conv_date}` → 2026-06-08 (conversation start date from createdAt)
+- `{conv_datetime}` → 2026-06-08T093000 (conversation start date+time)
+- `{end_date}` → 2026-06-11 (alias for export date)
+- `{title}` → my-conversation-title (sanitized from actual session title)
 - `{platform}` → chatgpt or gemini
 - `{index}` → 001 (zero-padded, for bulk)
 - `{msgcount}` → 24
