@@ -105,7 +105,7 @@ ai-chat-exporter/
 │   ├── components/        # Reusable React components
 │   ├── styles/            # CSS styles
 │   └── tabs/              # Additional pages
-├── __tests__/             # Test files
+├── tests/                 # Test files
 ├── icons/                 # Extension icons
 └── package.json
 ```
