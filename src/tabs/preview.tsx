@@ -69,11 +69,11 @@ export default function Preview() {
       }
       
       // Fallback: try to get active conversation
-      const allItems: Record<string, any> = await chrome.storage.local.get(null) as Record<string, any>
+      const allItems = await chrome.storage.local.get(null) as unknown as Record<string, unknown>
       const conversationKey = Object.keys(allItems).find(k => k.startsWith('conversation-'))
       
       if (conversationKey) {
-        setConversation(allItems[conversationKey])
+        setConversation(allItems[conversationKey] as Conversation)
       } else {
         setError('No conversation to preview')
       }

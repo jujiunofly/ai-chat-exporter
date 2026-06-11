@@ -6,6 +6,7 @@
  */
 import type { Conversation, ChatMessage, PlatformParser, ConversationListItem } from '../lib/types'
 import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
+import { preferMoreCompleteConversation } from '../lib/parser-fallback'
 
 /**
  * Grok parser implementation
@@ -380,21 +381,18 @@ async function main() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'PARSE_CONVERSATION') {
     parser.parseCurrentConversation().then(conversation => {
-      if (conversation && conversation.messages.length > 0) {
-        sendResponse({ data: conversation })
-      } else {
-        // DOM parsing returned 0 messages — try API
-        const url = window.location.href
-        const match = url.match(/\/chat\/([a-f0-9-]+)/)
-        if (match) {
-          parser.fetchConversationDetail(match[1]).then(apiConv => {
-            sendResponse({ data: apiConv || conversation })
-          }).catch(() => {
-            sendResponse({ data: conversation })
-          })
-        } else {
+      // API detail is preferred when available because it preserves markdown,
+      // LaTeX, artifacts, and paragraph structure better than DOM text extraction.
+      const url = window.location.href
+      const match = url.match(/\/chat\/([a-f0-9-]+)/)
+      if (match) {
+        parser.fetchConversationDetail(match[1]).then(apiConv => {
+          sendResponse({ data: preferMoreCompleteConversation(conversation, apiConv) })
+        }).catch(() => {
           sendResponse({ data: conversation })
-        }
+        })
+      } else {
+        sendResponse({ data: conversation })
       }
     }).catch(error => {
       sendResponse({ error: error.message })

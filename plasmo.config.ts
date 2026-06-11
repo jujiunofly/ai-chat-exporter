@@ -1,6 +1,4 @@
-import type { PlasmoConfig } from "plasmo"
-
-const config: PlasmoConfig = {
+const config = {
   content_scripts: [
     {
       matches: ["https://chatgpt.com/*"],

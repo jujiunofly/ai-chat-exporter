@@ -12,9 +12,10 @@ import { FilenameEditor } from './components/FilenameEditor'
 import { conversationToMarkdown, generateMarkdownFilename } from './lib/export-markdown'
 import { exportToPdf } from './lib/export-pdf'
 import { generateFilename } from './lib/filename'
+import { buildDownloadFilename } from './lib/download-path'
 import type { 
   Conversation, ExportFormat, ExtensionSettings, ConversationListItem, 
-  BulkExportProgress, DownloadFolderOption 
+  BulkExportProgress
 } from './lib/types'
 
 /** Tab mode type */
@@ -65,44 +66,6 @@ function detectPlatformFromUrl(url: string): 'chatgpt' | 'gemini' | 'claude' | '
     }
   } catch {}
   return null
-}
-
-/**
- * Build download filename with folder prefix based on settings
- */
-function buildDownloadFilename(
-  baseFilename: string, 
-  platform: 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok',
-  extension: string,
-  downloadFolder: DownloadFolderOption,
-  customFolderName: string
-): string {
-  const ext = extension.startsWith('.') ? extension : `.${extension}`
-  const filename = baseFilename.endsWith(ext) ? baseFilename : `${baseFilename}${ext}`
-  
-  switch (downloadFolder) {
-    case 'by-platform': {
-      const folderMap: Record<string, string> = {
-        chatgpt: 'ChatGPT',
-        gemini: 'Gemini',
-        claude: 'Claude',
-        deepseek: 'DeepSeek',
-        grok: 'Grok'
-      }
-      const folder = folderMap[platform] || platform
-      return `${folder}/${filename}`
-    }
-    case 'custom': {
-      const safeFolder = customFolderName
-        .replace(/[\\:*?"<>|]/g, '_')
-        .replace(/^\\.\\./, '')
-        .replace(/^-|-$/g, '')
-        .substring(0, 100) || 'AI Chat Exports'
-      return `${safeFolder}/${filename}`
-    }
-    default:
-      return filename
-  }
 }
 
 /**

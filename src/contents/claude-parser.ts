@@ -9,6 +9,7 @@
  */
 import type { Conversation, ChatMessage, PlatformParser, ConversationListItem, ConversationArtifact } from '../lib/types'
 import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
+import { preferMoreCompleteConversation } from '../lib/parser-fallback'
 
 /** UUID regex for matching conversation IDs and org IDs */
 const UUID_REGEX = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
@@ -698,31 +699,26 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'PARSE_CONVERSATION') {
     console.log('[Claude Parser] PARSE_CONVERSATION request received')
     parser.parseCurrentConversation().then(conversation => {
-      if (conversation && conversation.messages.length > 0) {
-        console.log(`[Claude Parser] DOM parse succeeded: ${conversation.messages.length} messages`)
-        sendResponse({ data: conversation })
-      } else {
-        console.log(`[Claude Parser] DOM parse returned ${conversation?.messages?.length || 0} messages, trying API fallback`)
-        // DOM parsing returned 0 messages — try API
-        const url = window.location.href
-        const match = url.match(/\/chat\/([a-f0-9-]+)/)
-        if (match) {
-          console.log(`[Claude Parser] Found conversation ID: ${match[1]}, fetching from API`)
-          parser.fetchConversationDetail(match[1]).then(apiConv => {
-            if (apiConv) {
-              console.log(`[Claude Parser] API fetch succeeded: ${apiConv.messages.length} messages`)
-            } else {
-              console.log('[Claude Parser] API fetch returned null')
-            }
-            sendResponse({ data: apiConv || conversation })
-          }).catch(err => {
-            console.error('[Claude Parser] API fetch error:', err)
-            sendResponse({ data: conversation })
-          })
-        } else {
-          console.log('[Claude Parser] No conversation ID found in URL, returning DOM result')
+      // API detail is preferred when available because it preserves markdown,
+      // artifacts, attachments, and assistant responses better than DOM text extraction.
+      const url = window.location.href
+      const match = url.match(/\/chat\/([a-f0-9-]+)/)
+      if (match) {
+        console.log(`[Claude Parser] Found conversation ID: ${match[1]}, fetching from API detail`)
+        parser.fetchConversationDetail(match[1]).then(apiConv => {
+          if (apiConv) {
+            console.log(`[Claude Parser] API fetch succeeded: ${apiConv.messages.length} messages`)
+          } else {
+            console.log('[Claude Parser] API fetch returned null')
+          }
+          sendResponse({ data: preferMoreCompleteConversation(conversation, apiConv) })
+        }).catch(err => {
+          console.error('[Claude Parser] API fetch error:', err)
           sendResponse({ data: conversation })
-        }
+        })
+      } else {
+        console.log('[Claude Parser] No conversation ID found in URL, returning DOM result')
+        sendResponse({ data: conversation })
       }
     }).catch(error => {
       console.error('[Claude Parser] parseCurrentConversation error:', error)

@@ -13,7 +13,9 @@ const DEFAULT_SETTINGS: ExtensionSettings = {
   theme: 'light',
   filenamePattern: '{date}-{title}',
   downloadFolder: 'default',
-  customFolderName: 'AI Chat Exports'
+  customFolderName: 'AI Chat Exports',
+  exportArtifacts: true,
+  includeUploadedFiles: true
 }
 
 // Listen for extension installation
@@ -50,7 +52,7 @@ async function handleMessage(
       return handleSettingsUpdated(message.data as ExtensionSettings)
     
     case 'EXPORT_REQUEST':
-      return handleExportRequest(message.data, sender)
+      return handleExportRequest(message.data as { conversation: Conversation; format: string }, sender)
     
     case 'DETECT_PLATFORM':
       return handleDetectPlatform(sender)
@@ -134,6 +136,8 @@ async function handleDetectPlatform(
       platform = 'chatgpt'
     } else if (url.hostname === 'gemini.google.com') {
       platform = 'gemini'
+    } else if (url.hostname === 'claude.ai') {
+      platform = 'claude'
     } else if (url.hostname === 'deepseek.com' || url.hostname === 'chat.deepseek.com') {
       platform = 'deepseek'
     } else if (url.hostname === 'grok.com' || url.hostname === 'www.grok.com') {
@@ -192,18 +196,12 @@ async function handleFetchAllConversations(
     return { error: 'Failed to fetch all conversations' }
   }
 }
-
-// Handle download requests
-chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
-  suggest()
-})
-
 // Clean up old exports via chrome.alarms (MV3 compatible)
 chrome.alarms.create('cleanup-exports', { periodInMinutes: 60 })
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'cleanup-exports') return
   try {
-    const items = await chrome.storage.local.get(null)
+    const items = await chrome.storage.local.get(null) as unknown as Record<string, unknown>
     const now = Date.now()
     
     for (const [key, value] of Object.entries(items)) {
