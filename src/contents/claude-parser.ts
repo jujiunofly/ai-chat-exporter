@@ -7,7 +7,7 @@
  * - No access token needed — the browser's cookie handles authentication
  * - Org ID is extracted from the page HTML or API responses
  */
-import type { Conversation, ChatMessage, PlatformParser, ConversationListItem } from '../lib/types'
+import type { Conversation, ChatMessage, PlatformParser, ConversationListItem, ConversationArtifact } from '../lib/types'
 import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
 
 /** UUID regex for matching conversation IDs and org IDs */
@@ -294,6 +294,7 @@ class ClaudeParser implements PlatformParser {
 
       const data = await response.json()
       const messages: ChatMessage[] = []
+      const artifacts: ConversationArtifact[] = []
 
       // Claude API returns chat_messages array
       if (data.chat_messages && Array.isArray(data.chat_messages)) {
@@ -330,6 +331,28 @@ class ClaudeParser implements PlatformParser {
                 const toolName = block.name || 'tool'
                 const toolInput = block.input ? JSON.stringify(block.input, null, 2) : ''
                 textParts.push(`Tool use: ${toolName}\n${toolInput}`)
+                
+                // Extract artifact from tool_use with input.content (artifacts/artifacts)
+                if (block.input?.content) {
+                  const artifactType = block.name?.includes('html') || block.name?.includes('document') 
+                    ? 'html' 
+                    : 'code'
+                  artifacts.push({
+                    type: artifactType,
+                    title: block.input.title || block.name || 'Artifact',
+                    content: block.input.content,
+                    language: block.name,
+                    mimeType: block.input.mimeType
+                  })
+                }
+              } else if (block.type === 'document') {
+                // Uploaded file reference
+                artifacts.push({
+                  type: 'document',
+                  title: block.title || block.file_name || 'Uploaded File',
+                  content: block.text || block.content || '',
+                  mimeType: block.media_type || block.mime_type
+                })
               }
             }
             content = textParts.join('\n\n')
@@ -347,14 +370,17 @@ class ClaudeParser implements PlatformParser {
         }
       }
 
-      return {
+      const conversation: Conversation = {
         id: data.uuid || data.id || id,
         title: data.name || data.title || this.getConversationTitle(),
         url: `https://claude.ai/chat/${id}`,
         messages,
         createdAt: data.created_at ? new Date(data.created_at).getTime() : undefined,
-        platform: 'claude'
+        platform: 'claude',
+        artifacts: artifacts.length > 0 ? artifacts : undefined
       }
+
+      return conversation
     } catch (error) {
       console.error(`[Claude Parser] Error fetching conversation detail:`, error)
       return null
@@ -671,7 +697,22 @@ async function main() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'PARSE_CONVERSATION') {
     parser.parseCurrentConversation().then(conversation => {
-      sendResponse({ data: conversation })
+      if (conversation && conversation.messages.length > 0) {
+        sendResponse({ data: conversation })
+      } else {
+        // DOM parsing returned 0 messages — try API
+        const url = window.location.href
+        const match = url.match(/\/chat\/([a-f0-9-]+)/)
+        if (match) {
+          parser.fetchConversationDetail(match[1]).then(apiConv => {
+            sendResponse({ data: apiConv || conversation })
+          }).catch(() => {
+            sendResponse({ data: conversation })
+          })
+        } else {
+          sendResponse({ data: conversation })
+        }
+      }
     }).catch(error => {
       sendResponse({ error: error.message })
     })

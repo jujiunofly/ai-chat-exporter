@@ -244,6 +244,37 @@ export default function Popup() {
       return
     }
 
+    // Ensure conversation has a meaningful title for filename generation
+    let exportConversation = conversation
+    if (!conversation.title || 
+        conversation.title === 'Untitled Conversation' || 
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conversation.title)) {
+      // Try to get title from document.title
+      let betterTitle = ''
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+        if (tab?.title) {
+          // Strip platform suffixes like " - ChatGPT", " | Claude", etc.
+          const cleaned = tab.title.replace(/\s*[-–|]\s*(ChatGPT|Claude|Gemini|DeepSeek|Grok).*$/i, '').trim()
+          if (cleaned && cleaned.length > 0 && cleaned !== 'ChatGPT' && cleaned !== 'Claude' && cleaned !== 'Gemini' && cleaned !== 'DeepSeek' && cleaned !== 'Grok') {
+            betterTitle = cleaned
+          }
+        }
+      } catch {}
+      
+      // Fall back to first user message
+      if (!betterTitle && conversation.messages.length > 0) {
+        const firstUserMsg = conversation.messages.find(m => m.role === 'user')
+        if (firstUserMsg) {
+          betterTitle = firstUserMsg.content.substring(0, 80)
+        }
+      }
+      
+      if (betterTitle) {
+        exportConversation = { ...conversation, title: betterTitle }
+      }
+    }
+
     setLoading(true)
     setError(null)
     setSuccess(null)
@@ -258,8 +289,8 @@ export default function Popup() {
       }
 
       const baseFilename = settings?.filenamePattern 
-        ? generateFilename(settings.filenamePattern, conversation)
-        : generateMarkdownFilename(conversation).replace(/\.md$/, '')
+        ? generateFilename(settings.filenamePattern, exportConversation)
+        : generateMarkdownFilename(exportConversation).replace(/\.md$/, '')
 
       const downloadFolder = settings?.downloadFolder ?? 'default'
       const customFolderName = settings?.customFolderName ?? 'AI Chat Exports'
@@ -267,8 +298,8 @@ export default function Popup() {
       const clearSuccess = () => setTimeout(() => setSuccess(null), 3000)
 
       if (format === 'markdown') {
-        const markdown = conversationToMarkdown(conversation, exportOptions)
-        const filename = buildDownloadFilename(baseFilename, conversation.platform, '.md', downloadFolder, customFolderName)
+        const markdown = conversationToMarkdown(exportConversation, exportOptions)
+        const filename = buildDownloadFilename(baseFilename, exportConversation.platform, '.md', downloadFolder, customFolderName)
         
         // Create and download file
         const blob = new Blob([markdown], { type: 'text/markdown' })
@@ -284,8 +315,8 @@ export default function Popup() {
         setSuccess('Exported as Markdown!')
         clearSuccess()
       } else {
-        const filename = buildDownloadFilename(baseFilename, conversation.platform, '.pdf', downloadFolder, customFolderName)
-        await exportToPdf(conversation, exportOptions, filename)
+        const filename = buildDownloadFilename(baseFilename, exportConversation.platform, '.pdf', downloadFolder, customFolderName)
+        await exportToPdf(exportConversation, exportOptions, filename)
         setSuccess('PDF exported successfully!')
         clearSuccess()
       }

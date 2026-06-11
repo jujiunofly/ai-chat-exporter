@@ -93,7 +93,13 @@ export function generateFilename(
     end_date: getDateStr(),
     conv_date: getConvDateStr(conversation),
     conv_datetime: getConvDateTimeStr(conversation),
-    title: sanitizeFilename(conversation.title || 'untitled'),
+    title: sanitizeFilename(
+      conversation.title && conversation.title !== 'Untitled Conversation'
+        ? conversation.title
+        : (conversation.messages.length > 0
+            ? conversation.messages[0].content.substring(0, 80)
+            : 'untitled')
+    ),
     platform: conversation.platform,
     index: index !== undefined ? String(index).padStart(3, '0') : '000',
     msgcount: String(conversation.messages.length),

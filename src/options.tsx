@@ -166,13 +166,39 @@ export default function Options() {
             </div>
             <input 
               className="input" 
-              style={{ width: '150px' }}
+              style={{ width: '150px' }} 
               value={settings.customFolderName}
               onChange={(e) => updateSetting('customFolderName', e.target.value)}
               placeholder="AI Chat Exports"
             />
           </div>
         )}
+
+        <div className="options-row">
+          <div>
+            <div className="option-label">Export Artifacts</div>
+            <div className="option-description">Save code artifacts and documents as separate files</div>
+          </div>
+          <input 
+            type="checkbox" 
+            className="toggle" 
+            checked={settings.exportArtifacts}
+            onChange={(e) => updateSetting('exportArtifacts', e.target.checked)}
+          />
+        </div>
+
+        <div className="options-row">
+          <div>
+            <div className="option-label">Include Uploaded Files</div>
+            <div className="option-description">Include references to uploaded files in exports</div>
+          </div>
+          <input 
+            type="checkbox" 
+            className="toggle" 
+            checked={settings.includeUploadedFiles}
+            onChange={(e) => updateSetting('includeUploadedFiles', e.target.checked)}
+          />
+        </div>
       </div>
 
       {/* Filename Pattern */}

@@ -77,11 +77,27 @@ describe('Filename Generation', () => {
       expect(filename).toBe('test-file-v20')
     })
 
-    it('should handle empty title', () => {
+    it('should handle empty title by using first user message', () => {
       const conv = createConversation({ title: '' })
       const filename = generateFilename('{title}', conv)
       
+      // Empty title falls back to first user message content
+      expect(filename).toBe('hello')
+    })
+
+    it('should handle empty title with no messages', () => {
+      const conv = createConversation({ title: '', messages: [] })
+      const filename = generateFilename('{title}', conv)
+      
       expect(filename).toBe('untitled')
+    })
+
+    it('should handle Untitled Conversation title by using first user message', () => {
+      const conv = createConversation({ title: 'Untitled Conversation' })
+      const filename = generateFilename('{title}', conv)
+      
+      // Untitled Conversation falls back to first user message content
+      expect(filename).toBe('hello')
     })
 
     it('should handle missing index by defaulting to 000', () => {

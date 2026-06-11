@@ -45,6 +45,22 @@ export interface CodeBlock {
 }
 
 /**
+ * Represents an artifact extracted from a conversation
+ */
+export interface ConversationArtifact {
+  /** Type of artifact */
+  type: 'code' | 'document' | 'image' | 'html'
+  /** Optional title/name for the artifact */
+  title?: string
+  /** The content of the artifact */
+  content: string
+  /** Programming language (for code artifacts) */
+  language?: string
+  /** MIME type (for document artifacts) */
+  mimeType?: string
+}
+
+/**
  * Represents a complete conversation
  */
 export interface Conversation {
@@ -60,6 +76,8 @@ export interface Conversation {
   createdAt?: number
   /** Platform where the conversation originates */
   platform: 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok'
+  /** Optional artifacts extracted from the conversation */
+  artifacts?: ConversationArtifact[]
 }
 
 /**
@@ -181,6 +199,10 @@ export interface ExtensionSettings {
   downloadFolder: DownloadFolderOption
   /** Custom folder name (used when downloadFolder is 'custom') */
   customFolderName: string
+  /** Whether to export artifacts as separate files */
+  exportArtifacts: boolean
+  /** Whether to include uploaded file references */
+  includeUploadedFiles: boolean
 }
 
 /**
@@ -194,7 +216,9 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   theme: 'light',
   filenamePattern: '{date}-{title}',
   downloadFolder: 'default',
-  customFolderName: 'AI Chat Exports'
+  customFolderName: 'AI Chat Exports',
+  exportArtifacts: true,
+  includeUploadedFiles: true
 }
 
 /**

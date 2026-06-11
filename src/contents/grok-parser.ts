@@ -380,7 +380,22 @@ async function main() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'PARSE_CONVERSATION') {
     parser.parseCurrentConversation().then(conversation => {
-      sendResponse({ data: conversation })
+      if (conversation && conversation.messages.length > 0) {
+        sendResponse({ data: conversation })
+      } else {
+        // DOM parsing returned 0 messages — try API
+        const url = window.location.href
+        const match = url.match(/\/chat\/([a-f0-9-]+)/)
+        if (match) {
+          parser.fetchConversationDetail(match[1]).then(apiConv => {
+            sendResponse({ data: apiConv || conversation })
+          }).catch(() => {
+            sendResponse({ data: conversation })
+          })
+        } else {
+          sendResponse({ data: conversation })
+        }
+      }
     }).catch(error => {
       sendResponse({ error: error.message })
     })
