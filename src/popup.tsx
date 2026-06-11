@@ -45,7 +45,7 @@ const AiIcon = () => (
 /**
  * Detect platform from URL
  */
-function detectPlatformFromUrl(url: string): 'chatgpt' | 'gemini' | null {
+function detectPlatformFromUrl(url: string): 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok' | null {
   try {
     const parsed = new URL(url)
     if (parsed.hostname === 'chatgpt.com' || parsed.hostname === 'chat.openai.com') {
@@ -53,6 +53,15 @@ function detectPlatformFromUrl(url: string): 'chatgpt' | 'gemini' | null {
     }
     if (parsed.hostname === 'gemini.google.com') {
       return 'gemini'
+    }
+    if (parsed.hostname === 'claude.ai') {
+      return 'claude'
+    }
+    if (parsed.hostname === 'deepseek.com' || parsed.hostname === 'chat.deepseek.com') {
+      return 'deepseek'
+    }
+    if (parsed.hostname === 'grok.com' || parsed.hostname === 'www.grok.com') {
+      return 'grok'
     }
   } catch {}
   return null
@@ -63,7 +72,7 @@ function detectPlatformFromUrl(url: string): 'chatgpt' | 'gemini' | null {
  */
 function buildDownloadFilename(
   baseFilename: string, 
-  platform: 'chatgpt' | 'gemini',
+  platform: 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok',
   extension: string,
   downloadFolder: DownloadFolderOption,
   customFolderName: string
@@ -73,13 +82,20 @@ function buildDownloadFilename(
   
   switch (downloadFolder) {
     case 'by-platform': {
-      const folder = platform === 'chatgpt' ? 'ChatGPT' : 'Gemini'
+      const folderMap: Record<string, string> = {
+        chatgpt: 'ChatGPT',
+        gemini: 'Gemini',
+        claude: 'Claude',
+        deepseek: 'DeepSeek',
+        grok: 'Grok'
+      }
+      const folder = folderMap[platform] || platform
       return `${folder}/${filename}`
     }
     case 'custom': {
       const safeFolder = customFolderName
         .replace(/[\\:*?"<>|]/g, '_')
-        .replace(/^\.\./, '')
+        .replace(/^\\.\\./, '')
         .replace(/^-|-$/g, '')
         .substring(0, 100) || 'AI Chat Exports'
       return `${safeFolder}/${filename}`
@@ -443,7 +459,7 @@ export default function Popup() {
     }
   }
 
-  const platformLabel = platform === 'chatgpt' ? 'ChatGPT' : platform === 'gemini' ? 'Gemini' : null
+  const platformLabel = platform === 'chatgpt' ? 'ChatGPT' : platform === 'gemini' ? 'Gemini' : platform === 'claude' ? 'Claude' : platform === 'deepseek' ? 'DeepSeek' : platform === 'grok' ? 'Grok' : null
   const allSelected = conversationList.length > 0 && selectedIds.length === conversationList.length
 
   return (
@@ -479,7 +495,7 @@ export default function Popup() {
           <div className="tab-content" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {!platform ? (
               <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
-                <p>Navigate to ChatGPT or Gemini to export conversations.</p>
+                <p>Navigate to ChatGPT, Gemini, Claude, DeepSeek, or Grok to export conversations.</p>
               </div>
             ) : !conversation ? (
               <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>

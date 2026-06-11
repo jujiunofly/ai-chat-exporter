@@ -55,7 +55,7 @@ export function ConversationList({
                 {conv.title || 'Untitled'}
               </span>
               <span className="text-xs text-muted">
-                {conv.platform === 'chatgpt' ? 'ChatGPT' : 'Gemini'}
+                {conv.platform === 'chatgpt' ? 'ChatGPT' : conv.platform === 'gemini' ? 'Gemini' : conv.platform === 'claude' ? 'Claude' : conv.platform === 'deepseek' ? 'DeepSeek' : conv.platform === 'grok' ? 'Grok' : 'Unknown'}
                 {conv.messageCount ? ` · ${conv.messageCount} messages` : ''}
               </span>
             </div>

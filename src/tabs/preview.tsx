@@ -154,7 +154,7 @@ export default function Preview() {
     )
   }
 
-  const platformName = conversation?.platform === 'chatgpt' ? 'ChatGPT' : 'Gemini'
+  const platformName = conversation?.platform === 'chatgpt' ? 'ChatGPT' : conversation?.platform === 'gemini' ? 'Gemini' : conversation?.platform === 'claude' ? 'Claude' : conversation?.platform === 'deepseek' ? 'DeepSeek' : conversation?.platform === 'grok' ? 'Grok' : 'Unknown'
   const createdDate = conversation?.createdAt 
     ? new Date(conversation.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })

@@ -33,7 +33,7 @@ export function conversationToHtml(
   options: ExportOptions
 ): string {
   const title = escapeHtml(conversation.title || 'Untitled Conversation')
-  const platform = conversation.platform === 'chatgpt' ? 'ChatGPT' : 'Google Gemini'
+  const platform = conversation.platform === 'chatgpt' ? 'ChatGPT' : conversation.platform === 'gemini' ? 'Google Gemini' : conversation.platform === 'claude' ? 'Claude' : conversation.platform === 'deepseek' ? 'DeepSeek' : conversation.platform === 'grok' ? 'Grok' : conversation.platform
   
   return `<!DOCTYPE html>
 <html lang="en">
@@ -452,40 +452,4 @@ export async function exportToPdf(
  * @param conversation - The conversation
  * @param options - Export options
  */
-export async function downloadAsHtml(
-  conversation: Conversation,
-  options: ExportOptions
-): Promise<void> {
-  const html = conversationToHtml(conversation, options)
-  const filename = generateHtmlFilename(conversation)
-  
-  // Create download
-  const blob = new Blob([html], { type: 'text/html' })
-  const url = URL.createObjectURL(blob)
-  
-  await chrome.downloads.download({
-    url,
-    filename,
-    saveAs: false
-  })
-  
-  // Clean up
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
 
-/**
- * Generate filename for HTML export
- * @param conversation - The conversation
- * @returns Sanitized filename
- */
-function generateHtmlFilename(conversation: Conversation): string {
-  const title = conversation.title || 'conversation'
-  const sanitized = title
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .substring(0, 100)
-  
-  return `${sanitized}.html`
-}

@@ -134,6 +134,10 @@ async function handleDetectPlatform(
       platform = 'chatgpt'
     } else if (url.hostname === 'gemini.google.com') {
       platform = 'gemini'
+    } else if (url.hostname === 'deepseek.com' || url.hostname === 'chat.deepseek.com') {
+      platform = 'deepseek'
+    } else if (url.hostname === 'grok.com' || url.hostname === 'www.grok.com') {
+      platform = 'grok'
     }
     
     return {

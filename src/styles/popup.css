@@ -238,6 +238,24 @@ body {
   color: #1e40af;
 }
 
+.badge.deepseek {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #2563eb;
+}
+
+.badge.grok {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+  color: #374151;
+}
+
+.badge.claude {
+  background: #fef3c7;
+  border-color: #fbbf24;
+  color: #92400e;
+}
+
 /* ===== Filename Editor ===== */
 .chip-container {
   display: flex;

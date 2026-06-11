@@ -59,7 +59,7 @@ export interface Conversation {
   /** Optional creation timestamp */
   createdAt?: number
   /** Platform where the conversation originates */
-  platform: 'chatgpt' | 'gemini'
+  platform: 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok'
 }
 
 /**
@@ -90,7 +90,7 @@ export interface ConversationListItem {
   id: string
   title: string
   url: string
-  platform: 'chatgpt' | 'gemini'
+  platform: 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok'
   /** Optional: number of messages */
   messageCount?: number
   /** Optional: creation timestamp */
@@ -137,7 +137,7 @@ export const FILENAME_OPTIONS: FilenameOption[] = [
  */
 export interface PlatformParser {
   /** The platform this parser handles */
-  platform: 'chatgpt' | 'gemini'
+  platform: 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok'
   
   /**
    * Parse the current conversation from the DOM

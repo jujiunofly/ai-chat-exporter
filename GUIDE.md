@@ -10,7 +10,10 @@ ai-chat-exporter/
 │   ├── background.ts          ← Service worker (message routing)
 │   ├── contents/
 │   │   ├── chatgpt-parser.ts  ← ChatGPT DOM parser + API list fetcher
-│   │   └── gemini-parser.ts   ← Gemini DOM parser + API list fetcher
+│   │   ├── gemini-parser.ts   ← Gemini DOM parser + API list fetcher
+│   │   ├── claude-parser.ts   ← Claude DOM parser + API list fetcher
+│   │   ├── deepseek-parser.ts ← DeepSeek DOM parser + API list fetcher
+│   │   └── grok-parser.ts     ← Grok DOM parser + API list fetcher
 │   ├── lib/
 │   │   ├── types.ts           ← All TypeScript interfaces & constants
 │   │   ├── dom-utils.ts       ← Shared DOM helpers (text extraction, code blocks)
@@ -28,7 +31,7 @@ ai-chat-exporter/
 │   │   └── print.css           ← Preview page + print media query
 │   └── tabs/
 │       └── preview.tsx         ← Full-page conversation preview
-├── tests/                      ← Vitest test suite (182 tests)
+├── tests/                      ← Vitest test suite (320 tests)
 ├── build/chrome-mv3-prod/      ← Extension build output (load this in Chrome)
 └── GUIDE.md                    ← This file
 ```
@@ -120,7 +123,7 @@ Engine: `src/lib/filename.ts` → `generateFilename(pattern, conversation, index
 ### 6. Download Folders
 Setting in options: 'default' | 'by-platform' | 'custom'
 - default: files go to Downloads root
-- by-platform: `ChatGPT/filename.md` or `Gemini/filename.pdf`
+- by-platform: `ChatGPT/filename.md`, `Gemini/filename.pdf`, `Claude/filename.md`, `DeepSeek/filename.pdf`, or `Grok/filename.md`
 - custom: `MyCustomFolder/filename.md`
 
 Implemented in popup.tsx → `buildDownloadFilename()` prepends folder to filename.
@@ -150,7 +153,7 @@ Extension uses `chrome.runtime.sendMessage` / `chrome.tabs.sendMessage`:
 Framework: Vitest with jsdom environment
 
 ```
-npm test           # Run all 182 tests
+npm test           # Run all 320 tests
 npx vitest run     # Same
 npx vitest watch   # Watch mode
 ```

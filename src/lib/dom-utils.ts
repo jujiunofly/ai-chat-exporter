@@ -182,47 +182,4 @@ export function isElementVisible(element: Element): boolean {
  * @param selector - CSS selector to match
  * @returns The matching ancestor or null
  */
-export function closestAncestor(
-  element: Element | null,
-  selector: string
-): Element | null {
-  if (!element) return null
-  return element.closest(selector)
-}
 
-/**
- * Wait for an element to appear in the DOM
- * @param selector - CSS selector to wait for
- * @param timeout - Maximum wait time in milliseconds
- * @returns Promise resolving to the element or null
- */
-export function waitForElement(
-  selector: string,
-  timeout: number = 5000
-): Promise<Element | null> {
-  return new Promise(resolve => {
-    const element = document.querySelector(selector)
-    if (element) {
-      resolve(element)
-      return
-    }
-    
-    const observer = new MutationObserver(() => {
-      const element = document.querySelector(selector)
-      if (element) {
-        observer.disconnect()
-        resolve(element)
-      }
-    })
-    
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    })
-    
-    setTimeout(() => {
-      observer.disconnect()
-      resolve(null)
-    }, timeout)
-  })
-}

@@ -4,6 +4,9 @@
 
 import type { Conversation, ExportOptions, ChatMessage, CodeBlock } from './types'
 
+/** Platform display name lookup */
+const platformLabels: Record<string, string> = { chatgpt: 'ChatGPT', gemini: 'Google Gemini', claude: 'Claude', deepseek: 'DeepSeek', grok: 'Grok' }
+
 /**
  * Convert a conversation to Markdown format
  * @param conversation - The conversation to convert
@@ -30,7 +33,7 @@ export function conversationToMarkdown(
   
   // Add footer
   lines.push('---')
-  lines.push(`*Exported from ${conversation.platform === 'chatgpt' ? 'ChatGPT' : 'Google Gemini'} on ${new Date().toLocaleDateString()}*`)
+  lines.push(`*Exported from ${platformLabels[conversation.platform] || conversation.platform} on ${new Date().toLocaleDateString()}*`)
   lines.push('')
   
   return lines.join('\n')
@@ -50,7 +53,7 @@ function generateMetadataHeader(conversation: Conversation): string[] {
   // Add metadata section
   lines.push('## Metadata')
   lines.push('')
-  lines.push(`- **Platform:** ${conversation.platform === 'chatgpt' ? 'ChatGPT' : 'Google Gemini'}`)
+  lines.push(`- **Platform:** ${platformLabels[conversation.platform] || conversation.platform}`)
   lines.push(`- **URL:** ${conversation.url}`)
   lines.push(`- **Messages:** ${conversation.messages.length}`)
   

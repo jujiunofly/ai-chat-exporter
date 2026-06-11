@@ -2,7 +2,7 @@
 
 # AI Chat Exporter
 
-**Export your ChatGPT & Gemini conversations to beautifully formatted files.**
+**Export your ChatGPT, Gemini, Claude, DeepSeek & Grok conversations to beautifully formatted files.**
 
 [![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue?logo=googlechrome&logoColor=white)](https://github.com/pinguarmy/ai-chat-exporter)
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -21,7 +21,7 @@ One-click export. Bulk download. Custom filenames. Beautiful output.
 
 ## Why?
 
-ChatGPT and Gemini don't let you export your conversations in a clean, portable format. Your conversations are trapped inside their platforms. **AI Chat Exporter** fixes that.
+ChatGPT, Gemini, Claude, DeepSeek, and Grok don't let you export your conversations in a clean, portable format. Your conversations are trapped inside their platforms. **AI Chat Exporter** fixes that.
 
 Export any conversation to **PDF** or **Markdown** with proper formatting, code blocks, images, and metadata. Perfect for:
 
@@ -35,13 +35,13 @@ Export any conversation to **PDF** or **Markdown** with proper formatting, code 
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-Platform** | Works on both ChatGPT and Gemini — detect and export from either |
+| **Multi-Platform** | Works on ChatGPT, Gemini, Claude, DeepSeek, and Grok |
 | **PDF Export** | Clean, print-ready PDF with proper page breaks and typography |
 | **Markdown Export** | Structured `.md` files with code blocks, headers, and formatting |
 | **Bulk Export** | Fetch ALL your conversations via API and export multiple at once |
 | **Custom Filenames** | Template system with `{date}`, `{title}`, `{platform}`, `{conv_date}` |
 | **Auto-Download** | No save dialogs — files go straight to your configured folder |
-| **Organized Folders** | Auto-sort exports into `ChatGPT/` or `Gemini/` subfolders |
+| **Organized Folders** | Auto-sort exports into `ChatGPT/`, `Gemini/`, `Claude/`, `DeepSeek/`, or `Grok/` subfolders |
 | **Dark Mode** | Full light/dark theme support via CSS custom properties |
 | **Zero Tracking** | No analytics, no accounts, no data leaves your browser |
 | **Open Source** | MIT licensed — inspect, fork, and contribute |
@@ -76,14 +76,14 @@ npx plasmo build
 
 ### Export Current Conversation
 
-1. Open any conversation on **ChatGPT** or **Gemini**
+1. Open any conversation on **ChatGPT**, **Gemini**, **Claude**, **DeepSeek**, or **Grok**
 2. Click the **AI Chat Exporter** icon in your toolbar
 3. Choose **PDF** or **Markdown**
 4. Click **Export** — file downloads automatically
 
 ### Bulk Export
 
-1. Navigate to ChatGPT or Gemini
+1. Navigate to ChatGPT, Gemini, Claude, DeepSeek, or Grok
 2. Click the extension icon → **Bulk** tab
 3. Wait for conversations to load (uses API — gets ALL, not just visible)
 4. Select conversations with checkboxes
@@ -109,7 +109,7 @@ Default pattern: `{conv_date}-{title}` → `2026-06-08-how-to-learn-python.pdf`
 Choose where files are saved in Settings:
 
 - **Default** → `Downloads/` root
-- **By Platform** → `Downloads/ChatGPT/` or `Downloads/Gemini/`
+| **By Platform** | `Downloads/ChatGPT/`, `Downloads/Gemini/`, `Downloads/Claude/`, `Downloads/DeepSeek/`, or `Downloads/Grok/` |
 - **Custom** → Any folder name you choose
 
 ## How It Works
