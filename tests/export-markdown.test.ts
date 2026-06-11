@@ -163,23 +163,24 @@ describe('Export Markdown', () => {
       const conv = createConversation({ title: 'My Test Conversation' })
       const filename = generateMarkdownFilename(conv)
       
-      expect(filename).toBe('my-test-conversation.md')
+      expect(filename).toBe('My-Test-Conversation.md')
     })
 
     it('should sanitize special characters', () => {
       const conv = createConversation({ title: 'Test: File (v2.0)!' })
       const filename = generateMarkdownFilename(conv)
       
-      expect(filename).toBe('test-file-v20.md')
+      // Only filesystem-unsafe chars are removed: <>:"/\|?* 
+      expect(filename).toBe('Test-File-(v2.0)!.md')
     })
 
     it('should handle long titles', () => {
       const conv = createConversation({ 
-        title: 'A'.repeat(200) 
+        title: 'A'.repeat(300) 
       })
       const filename = generateMarkdownFilename(conv)
       
-      expect(filename.length).toBeLessThanOrEqual(104) // 100 + '.md'
+      expect(filename.length).toBeLessThanOrEqual(204) // 200 + '.md'
     })
 
     it('should handle empty title', () => {
@@ -193,8 +194,73 @@ describe('Export Markdown', () => {
       const conv = createConversation({ title: '   ' })
       const filename = generateMarkdownFilename(conv)
       
-      // Whitespace-only titles get sanitized to empty or dash
-      expect(filename).toMatch(/^(conversation|[-])\.md$/)
+      // Whitespace-only titles get sanitized to empty, fallback to 'conversation.md'
+      expect(filename).toBe('conversation.md')
+    })
+
+    it('should preserve Chinese characters in title', () => {
+      const conv = createConversation({ title: '父亲体检报告分析' })
+      const filename = generateMarkdownFilename(conv)
+      
+      expect(filename).toBe('父亲体检报告分析.md')
+    })
+  })
+
+  describe('Paragraph Break Preservation', () => {
+    it('should preserve double newlines as paragraph breaks', () => {
+      const conv = createConversation({
+        messages: [{
+          id: 'msg-1',
+          role: 'assistant',
+          content: 'First paragraph.\n\nSecond paragraph.\n\nThird paragraph.'
+        }]
+      })
+      const md = conversationToMarkdown(conv, defaultOptions)
+      
+      expect(md).toContain('First paragraph.\n\nSecond paragraph.\n\nThird paragraph.')
+    })
+
+    it('should not merge content from different paragraphs', () => {
+      const conv = createConversation({
+        messages: [{
+          id: 'msg-1',
+          role: 'assistant',
+          content: 'Para one.\n\nPara two.'
+        }]
+      })
+      const md = conversationToMarkdown(conv, defaultOptions)
+      
+      // Verify the two paragraphs are separated by a blank line
+      expect(md).toContain('Para one.\n\nPara two.')
+    })
+
+    it('should preserve headers within message content', () => {
+      const conv = createConversation({
+        messages: [{
+          id: 'msg-1',
+          role: 'assistant',
+          content: '# Title\n\nBody text.\n\n## Subheading\n\nMore text.'
+        }]
+      })
+      const md = conversationToMarkdown(conv, defaultOptions)
+      
+      expect(md).toContain('# Title')
+      expect(md).toContain('## Subheading')
+    })
+
+    it('should preserve inline code and bold/italic within paragraphs', () => {
+      const conv = createConversation({
+        messages: [{
+          id: 'msg-1',
+          role: 'assistant',
+          content: 'This has **bold**, *italic*, and `code` inline.'
+        }]
+      })
+      const md = conversationToMarkdown(conv, defaultOptions)
+      
+      expect(md).toContain('**bold**')
+      expect(md).toContain('*italic*')
+      expect(md).toContain('`code`')
     })
   })
 })

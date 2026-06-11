@@ -95,8 +95,11 @@ Configure filename patterns in Settings:
 
 | Token | Output | Example |
 |-------|--------|---------|
-| `{date}` | Current date | `2026-06-11` |
+| `{date}` | Current/export date | `2026-06-11` |
+| `{datetime}` | Current date & time | `2026-06-11T143022` |
 | `{conv_date}` | Conversation start date | `2026-06-08` |
+| `{conv_datetime}` | Conversation start date & time | `2026-06-08T093000` |
+| `{end_date}` | Export date (alias) | `2026-06-11` |
 | `{title}` | Session title | `how-to-learn-python` |
 | `{platform}` | Platform name | `chatgpt` |
 | `{index}` | Number (bulk) | `001` |
@@ -148,7 +151,7 @@ npm install
 # Development mode (watch + hot reload)
 npx plasmo dev
 
-# Run tests (231 tests)
+# Run tests (422 tests)
 npm test
 
 # Production build
@@ -165,7 +168,10 @@ ai-chat-exporter/
 │   ├── background.ts          # Service worker
 │   ├── contents/
 │   │   ├── chatgpt-parser.ts  # ChatGPT DOM + API parser
-│   │   └── gemini-parser.ts   # Gemini DOM + API parser
+│   │   ├── claude-parser.ts   # Claude API parser
+│   │   ├── deepseek-parser.ts # DeepSeek DOM + API parser
+│   │   ├── gemini-parser.ts   # Gemini hook + API parser
+│   │   └── grok-parser.ts     # Grok DOM parser
 │   ├── lib/
 │   │   ├── types.ts           # TypeScript interfaces
 │   │   ├── export-markdown.ts # Markdown generator

@@ -154,18 +154,77 @@ function formatRoleLabel(role: ChatMessage['role']): string {
 }
 
 /**
- * Format message content
- * @param content - The message content
- * @returns Array of formatted lines
+ * Format message content preserving structure
+ * - Preserves code blocks (triple backticks) as-is
+ * - Preserves headers (#, ##, etc.)
+ * - Preserves lists (-, *, 1.)
+ * - Preserves double newlines as paragraph breaks
+ * - Preserves single newlines as line breaks
  */
 function formatContent(content: string): string[] {
-  // Split by double newlines to preserve paragraphs
-  const paragraphs = content.split(/\n\n+/)
+  const lines: string[] = []
   
-  return paragraphs.map(para => {
-    // Handle single newlines within paragraphs
-    return para.replace(/\n/g, '  \n')
-  })
+  // Split into segments: code blocks and regular text
+  const segments = splitContentSegments(content)
+  
+  for (const segment of segments) {
+    if (segment.type === 'code') {
+      // Preserve code blocks as-is
+      lines.push(segment.content)
+    } else {
+      // Process regular text paragraphs
+      const paragraphs = segment.content.split(/\n\n+/)
+      for (let i = 0; i < paragraphs.length; i++) {
+        if (paragraphs[i].trim()) {
+          lines.push(paragraphs[i])
+          // Add blank line between paragraphs to preserve paragraph breaks in markdown
+          if (i < paragraphs.length - 1) {
+            lines.push('')
+          }
+        }
+      }
+    }
+  }
+  
+  return lines
+}
+
+/**
+ * Split content into code block and text segments
+ */
+function splitContentSegments(content: string): Array<{ type: 'text' | 'code'; content: string }> {
+  const segments: Array<{ type: 'text' | 'code'; content: string }> = []
+  const codeBlockRegex = /(```[\s\S]*?```)/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    // Add text before code block
+    if (match.index > lastIndex) {
+      const text = content.slice(lastIndex, match.index)
+      if (text.trim()) {
+        segments.push({ type: 'text', content: text })
+      }
+    }
+    // Add code block
+    segments.push({ type: 'code', content: match[1] })
+    lastIndex = match.index + match[1].length
+  }
+  
+  // Add remaining text
+  if (lastIndex < content.length) {
+    const text = content.slice(lastIndex)
+    if (text.trim()) {
+      segments.push({ type: 'text', content: text })
+    }
+  }
+  
+  // If no segments found, treat entire content as text
+  if (segments.length === 0 && content.trim()) {
+    segments.push({ type: 'text', content })
+  }
+  
+  return segments
 }
 
 /**
@@ -192,11 +251,11 @@ function formatCodeBlock(block: CodeBlock): string[] {
 export function generateMarkdownFilename(conversation: Conversation): string {
   const title = conversation.title || 'conversation'
   const sanitized = title
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .substring(0, 100)
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')  // Remove filesystem-unsafe chars only
+    .replace(/\s+/g, '-')                      // Replace spaces with hyphens
+    .replace(/-+/g, '-')                       // Collapse multiple hyphens
+    .replace(/^-|-$/g, '')                     // Remove leading/trailing hyphens
+    .substring(0, 200)                         // Truncate
   
-  return `${sanitized}.md`
+  return sanitized ? `${sanitized}.md` : 'conversation.md'
 }

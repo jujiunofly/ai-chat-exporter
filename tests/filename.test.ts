@@ -31,7 +31,7 @@ describe('Filename Generation', () => {
       const conv = createConversation({ title: 'My Test Conversation' })
       const filename = generateFilename('{title}', conv)
       
-      expect(filename).toBe('my-test-conversation')
+      expect(filename).toBe('My-Test-Conversation')
     })
 
     it('should generate filename with platform pattern', () => {
@@ -63,26 +63,42 @@ describe('Filename Generation', () => {
     })
 
     it('should handle long titles by truncating', () => {
-      const conv = createConversation({ title: 'A'.repeat(200) })
+      const conv = createConversation({ title: 'A'.repeat(300) })
       const filename = generateFilename('{title}', conv)
       
-      expect(filename.length).toBeLessThanOrEqual(100)
+      expect(filename.length).toBeLessThanOrEqual(200)
     })
 
     it('should sanitize special characters', () => {
       const conv = createConversation({ title: 'Test: File (v2.0)! @#$%' })
       const filename = generateFilename('{title}', conv)
       
-      expect(filename).not.toMatch(/[:!@#$%^&*()]/)
-      expect(filename).toBe('test-file-v20')
+      // Only filesystem-unsafe chars are removed: <>:"/\|?* and control chars
+      // Other chars like (), !, @, #, $, % are preserved
+      expect(filename).not.toMatch(/[<>:"/\\|?*]/)
+      expect(filename).toBe('Test-File-(v2.0)!-@#$%')
+    })
+
+    it('should preserve Chinese characters in title', () => {
+      const conv = createConversation({ title: '父亲体检报告分析与病情评估' })
+      const filename = generateFilename('{title}', conv)
+      
+      expect(filename).toBe('父亲体检报告分析与病情评估')
+    })
+
+    it('should preserve Japanese characters in title', () => {
+      const conv = createConversation({ title: 'テスト会話' })
+      const filename = generateFilename('{title}', conv)
+      
+      expect(filename).toBe('テスト会話')
     })
 
     it('should handle empty title by using first user message', () => {
       const conv = createConversation({ title: '' })
       const filename = generateFilename('{title}', conv)
       
-      // Empty title falls back to first user message content
-      expect(filename).toBe('hello')
+      // Empty title falls back to first user message content (preserving case)
+      expect(filename).toBe('Hello')
     })
 
     it('should handle empty title with no messages', () => {
@@ -96,8 +112,8 @@ describe('Filename Generation', () => {
       const conv = createConversation({ title: 'Untitled Conversation' })
       const filename = generateFilename('{title}', conv)
       
-      // Untitled Conversation falls back to first user message content
-      expect(filename).toBe('hello')
+      // Untitled Conversation falls back to first user message content (preserving case)
+      expect(filename).toBe('Hello')
     })
 
     it('should handle missing index by defaulting to 000', () => {
@@ -187,7 +203,7 @@ describe('Filename Generation', () => {
       const conv = createConversation({ title: 'My Chat' })
       const title = FILENAME_PREVIEW_VARS.title(conv)
       
-      expect(title).toBe('my-chat')
+      expect(title).toBe('My-Chat')
     })
 
     it('should generate platform preview', () => {
@@ -220,7 +236,7 @@ describe('Filename Generation', () => {
       })
       const filename = generateFilename('{conv_date}-{title}', conv)
       
-      expect(filename).toMatch(/^2025-01-20-my-test-conversation$/)
+      expect(filename).toMatch(/^2025-01-20-My-Test-Conversation$/)
     })
 
     it('should use conv_datetime in filename pattern', () => {
@@ -230,22 +246,22 @@ describe('Filename Generation', () => {
       })
       const filename = generateFilename('{conv_datetime}-{title}', conv)
       
-      // T gets lowercased to t by sanitizeFilename
-      expect(filename).toMatch(/^2025-01-20t\d{6}-my-test-conversation$/)
+      // T is preserved now (no toLowerCase)
+      expect(filename).toMatch(/^2025-01-20T\d{6}-My-Test-Conversation$/)
     })
 
     it('should use end_date in filename pattern', () => {
       const conv = createConversation({ title: 'My Test Conversation' })
       const filename = generateFilename('{end_date}-{title}', conv)
       
-      expect(filename).toMatch(/^\d{4}-\d{2}-\d{2}-my-test-conversation$/)
+      expect(filename).toMatch(/^\d{4}-\d{2}-\d{2}-My-Test-Conversation$/)
     })
 
     it('should fallback conv_date to current date when no createdAt', () => {
       const conv = createConversation({ title: 'My Test Conversation' })
       const filename = generateFilename('{conv_date}-{title}', conv)
       
-      expect(filename).toMatch(/^\d{4}-\d{2}-\d{2}-my-test-conversation$/)
+      expect(filename).toMatch(/^\d{4}-\d{2}-\d{2}-My-Test-Conversation$/)
     })
   })
 })

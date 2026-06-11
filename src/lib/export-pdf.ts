@@ -126,29 +126,91 @@ function generateMessageHtml(message: ChatMessage, options: ExportOptions): stri
     })
   }
   
-  return `
-    <div class="message ${roleClass}">
-      <div class="role">${roleLabel}${authorInfo}</div>
-      ${content}
-    </div>`
+  return `\n    <div class="message ${roleClass}" style="page-break-inside: avoid;">\n      <div class="role">${roleLabel}${authorInfo}</div>\n      ${content}\n    </div>`
 }
 
 /**
- * Format content with HTML
+ * Format content with HTML, preserving LaTeX notation
  * @param content - Plain text content
  * @returns HTML formatted content
  */
 function formatHtmlContent(content: string): string {
-  // Escape HTML first
-  let html = escapeHtml(content)
+  // Split into segments: code blocks, LaTeX, and regular text
+  const segments = splitHtmlContentSegments(content)
+  let html = ''
   
-  // Convert double newlines to paragraphs
-  html = html.split('\n\n').map(para => {
-    // Convert single newlines to <br>
-    return `<p>${para.replace(/\n/g, '<br>')}</p>`
-  }).join('\n')
+  for (const segment of segments) {
+    if (segment.type === 'code') {
+      // Preserve code blocks
+      const langMatch = segment.content.match(/```(\w*)\n/)
+      const lang = langMatch ? langMatch[1] : ''
+      const code = segment.content.replace(/```\w*\n?/, '').replace(/\n?```$/, '')
+      const langAttr = lang ? ` data-language="${escapeHtml(lang)}"` : ''
+      html += `<pre${langAttr}><code>${escapeHtml(code)}</code></pre>\n`
+    } else if (segment.type === 'latex') {
+      // Preserve LaTeX notation as-is (do NOT escape)
+      html += `<p class="latex">${segment.content}</p>\n`
+    } else {
+      // Regular text: escape HTML, convert newlines to <br> in paragraphs
+      const escaped = escapeHtml(segment.content)
+      const paragraphs = escaped.split('\n\n')
+      for (const para of paragraphs) {
+        if (para.trim()) {
+          html += `<p>${para.replace(/\n/g, '<br>')}</p>\n`
+        }
+      }
+    }
+  }
   
   return html
+}
+
+/**
+ * Split content into code, LaTeX, and text segments for HTML generation
+ */
+function splitHtmlContentSegments(content: string): Array<{ type: 'text' | 'code' | 'latex'; content: string }> {
+  const segments: Array<{ type: 'text' | 'code' | 'latex'; content: string }> = []
+  
+  // Match code blocks, display LaTeX ($$...$$), and inline LaTeX ($...$ or \(...\) or \[...\])
+  const combinedRegex = /(```[\s\S]*?```|\$\$[\s\S]*?\$\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\$[^$\n]+?\$)/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  
+  while ((match = combinedRegex.exec(content)) !== null) {
+    // Add text before match
+    if (match.index > lastIndex) {
+      const text = content.slice(lastIndex, match.index)
+      if (text.trim()) {
+        segments.push({ type: 'text', content: text })
+      }
+    }
+    
+    // Determine type of match
+    const matched = match[1]
+    if (matched.startsWith('```')) {
+      segments.push({ type: 'code', content: matched })
+    } else {
+      // LaTeX: $...$, $$...$$, \(...\), \[...\]
+      segments.push({ type: 'latex', content: matched })
+    }
+    
+    lastIndex = match.index + matched.length
+  }
+  
+  // Add remaining text
+  if (lastIndex < content.length) {
+    const text = content.slice(lastIndex)
+    if (text.trim()) {
+      segments.push({ type: 'text', content: text })
+    }
+  }
+  
+  // If no segments found, treat as text
+  if (segments.length === 0 && content.trim()) {
+    segments.push({ type: 'text', content })
+  }
+  
+  return segments
 }
 
 /**
@@ -257,11 +319,19 @@ function getPrintStyles(): string {
       border-radius: 6px;
       overflow-x: auto;
       margin: 10px 0;
+      page-break-inside: avoid;
     }
     
     code {
       font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
       font-size: 0.9em;
+    }
+
+    .latex {
+      font-family: 'Times New Roman', 'CMU Serif', Georgia, serif;
+      font-style: italic;
+      padding: 8px 0;
+      margin: 8px 0;
     }
     
     .image {

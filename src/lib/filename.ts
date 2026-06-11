@@ -7,15 +7,15 @@ import type { Conversation } from './types'
 /**
  * Sanitize a string for use as a filename
  * Removes or replaces characters not allowed in filenames
+ * Preserves Unicode characters (Chinese, Japanese, Korean, Arabic, etc.)
  */
 function sanitizeFilename(text: string): string {
   return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '') // Remove non-alphanumeric except spaces and hyphens
-    .replace(/\s+/g, '-')         // Replace spaces with hyphens
-    .replace(/-+/g, '-')          // Collapse multiple hyphens
-    .replace(/^-|-$/g, '')        // Remove leading/trailing hyphens
-    .substring(0, 100)            // Truncate to reasonable length
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')  // Remove filesystem-unsafe chars only
+    .replace(/\s+/g, '-')                      // Replace spaces with hyphens
+    .replace(/-+/g, '-')                       // Collapse multiple hyphens
+    .replace(/^-|-$/g, '')                     // Remove leading/trailing hyphens
+    .substring(0, 200)                         // Truncate to reasonable length
 }
 
 /**

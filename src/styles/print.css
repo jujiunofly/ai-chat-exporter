@@ -123,6 +123,8 @@
     white-space: pre-wrap;
     word-wrap: break-word;
     font-size: 10pt;
+    page-break-inside: avoid;
+    break-inside: avoid;
   }
 
   code {

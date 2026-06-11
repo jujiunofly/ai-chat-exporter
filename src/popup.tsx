@@ -402,7 +402,7 @@ export default function Popup() {
 
           const baseFilename = settings?.filenamePattern
             ? generateFilename(settings.filenamePattern, conv, i + 1)
-            : `${conv.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 50)}`
+            : `${conv.title.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').substring(0, 200) || 'conversation'}`
 
           if (format === 'markdown') {
             const markdown = conversationToMarkdown(conv, exportOptions)
