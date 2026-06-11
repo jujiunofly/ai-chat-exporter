@@ -3,7 +3,7 @@
  * Parses conversations from chatgpt.com using DOM reading only
  */
 
-import type { Conversation, ChatMessage, PlatformParser } from '../lib/types'
+import type { Conversation, ChatMessage, PlatformParser, ConversationListItem } from '../lib/types'
 import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
 
 /**
@@ -296,6 +296,56 @@ class ChatGPTParser implements PlatformParser {
     
     return undefined
   }
+  
+  /**
+   * Get list of conversations from the sidebar
+   * Reads sidebar DOM to find conversation links
+   */
+  getConversationList(): ConversationListItem[] {
+    const conversations: ConversationListItem[] = []
+    const seen = new Set<string>()
+    
+    // ChatGPT sidebar has nav links with conversation titles
+    // Selectors to try for sidebar conversation links
+    const selectors = [
+      'nav a[href*="/c/"]',
+      'aside a[href*="/c/"]',
+      '[class*="sidebar"] a[href*="/c/"]',
+      '[class*="nav"] a[href*="/c/"]',
+      'a[href^="/c/"]'
+    ]
+    
+    for (const selector of selectors) {
+      const links = document.querySelectorAll(selector)
+      
+      links.forEach(link => {
+        const href = link.getAttribute('href')
+        if (!href) return
+        
+        // Extract conversation ID from URL
+        const match = href.match(/\/c\/([a-f0-9-]+)/)
+        if (!match) return
+        
+        const id = match[1]
+        if (seen.has(id)) return
+        
+        const title = extractTextContent(link) || 'Untitled Conversation'
+        
+        seen.add(id)
+        conversations.push({
+          id,
+          title,
+          url: new URL(href, window.location.origin).href,
+          platform: 'chatgpt'
+        })
+      })
+      
+      // If we found conversations with this selector, stop trying others
+      if (conversations.length > 0) break
+    }
+    
+    return conversations
+  }
 }
 
 // Create parser instance
@@ -338,6 +388,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         title: parser.getConversationTitle()
       }
     })
+  }
+  
+  if (message.type === 'FETCH_CONVERSATION_LIST') {
+    try {
+      const list = parser.getConversationList()
+      sendResponse({ data: list })
+    } catch (error) {
+      sendResponse({ error: (error as Error).message })
+    }
   }
 })
 

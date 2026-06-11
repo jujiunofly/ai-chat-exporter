@@ -11,7 +11,8 @@ const DEFAULT_SETTINGS: ExtensionSettings = {
   includeMetadata: true,
   includeCodeBlocks: true,
   includeImages: true,
-  theme: 'light'
+  theme: 'light',
+  filenamePattern: '{date}-{title}'
 }
 
 /**

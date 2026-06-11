@@ -1,8 +1,26 @@
 /**
- * PDF export functionality using browser print
+ * PDF export functionality using html2canvas + jsPDF
  */
 
 import type { Conversation, ExportOptions, ChatMessage } from './types'
+
+// Dynamic imports for jspdf and html2canvas
+let jsPDFModule: any = null
+let html2canvasModule: any = null
+
+async function loadJsPDF() {
+  if (!jsPDFModule) {
+    jsPDFModule = await import('jspdf')
+  }
+  return jsPDFModule.jsPDF || jsPDFModule.default.jsPDF
+}
+
+async function loadHtml2Canvas() {
+  if (!html2canvasModule) {
+    html2canvasModule = await import('html2canvas')
+  }
+  return html2canvasModule.default || html2canvasModule
+}
 
 /**
  * Generate HTML content from a conversation
@@ -280,43 +298,152 @@ function getPrintStyles(): string {
 }
 
 /**
- * Open preview in a new tab and trigger print
+ * Get PDF page dimensions based on page size
+ * @param pageSize - Page size (A4 or Letter)
+ * @returns Page dimensions in mm
+ */
+function getPageSizeDimensions(pageSize: 'A4' | 'Letter' = 'A4'): { width: number; height: number } {
+  if (pageSize === 'Letter') {
+    return { width: 216, height: 279 } // Letter in mm
+  }
+  return { width: 210, height: 297 } // A4 in mm
+}
+
+/**
+ * Export conversation to PDF blob
  * @param conversation - The conversation
  * @param options - Export options
+ * @returns PDF as Blob
  */
-export async function exportToPdf(
+export async function exportToPdfBlob(
   conversation: Conversation,
   options: ExportOptions
-): Promise<void> {
+): Promise<Blob> {
   const html = conversationToHtml(conversation, options)
   
-  // Create a blob URL
-  const blob = new Blob([html], { type: 'text/html' })
-  const url = URL.createObjectURL(blob)
+  // Create a hidden container for rendering
+  const container = document.createElement('div')
+  container.style.cssText = `
+    position: absolute;
+    left: -9999px;
+    top: -9999px;
+    width: 800px;
+    background: white;
+    padding: 40px;
+  `
+  container.innerHTML = html
+  document.body.appendChild(container)
   
-  // Open in new tab
-  const tab = await chrome.tabs.create({ url, active: true })
-  
-  // Wait for page to load, then trigger print
-  if (tab.id) {
-    const listener = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
-      if (tabId === tab.id && changeInfo.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(listener)
+  try {
+    // Wait for styles to apply
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    // Load html2canvas and render
+    const html2canvas = await loadHtml2Canvas()
+    const canvas = await html2canvas(container, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: '#ffffff'
+    })
+    
+    // Load jsPDF and create PDF
+    const jsPDF = await loadJsPDF()
+    const pageSize = options.format === 'pdf' ? 'A4' : 'Letter'
+    const dimensions = getPageSizeDimensions(pageSize as 'A4' | 'Letter')
+    
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: pageSize.toLowerCase() as any
+    })
+    
+    // Calculate dimensions for the canvas image
+    const imgWidth = dimensions.width - 20 // 10mm margins
+    const imgHeight = (canvas.height * imgWidth) / canvas.width
+    
+    // Handle multi-page
+    let position = 10 // 10mm top margin
+    const pageHeight = dimensions.height - 20 // 10mm top and bottom margins
+    
+    if (imgHeight <= pageHeight) {
+      // Single page
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 10, position, imgWidth, imgHeight)
+    } else {
+      // Multi-page
+      let remainingHeight = imgHeight
+      let sourceY = 0
+      
+      while (remainingHeight > 0) {
+        const sliceHeight = Math.min(remainingHeight, pageHeight)
+        const sourceSliceHeight = (sliceHeight / imgHeight) * canvas.height
         
-        // Inject print script
-        chrome.scripting.executeScript({
-          target: { tabId: tab.id! },
-          func: () => {
-            setTimeout(() => window.print(), 500)
-          }
-        })
+        // Create a slice of the canvas
+        const sliceCanvas = document.createElement('canvas')
+        sliceCanvas.width = canvas.width
+        sliceCanvas.height = sourceSliceHeight
+        const ctx = sliceCanvas.getContext('2d')
+        
+        if (ctx) {
+          ctx.drawImage(
+            canvas,
+            0, sourceY, canvas.width, sourceSliceHeight,
+            0, 0, canvas.width, sourceSliceHeight
+          )
+          
+          pdf.addImage(sliceCanvas.toDataURL('image/jpeg', 0.95), 'JPEG', 10, position, imgWidth, sliceHeight)
+        }
+        
+        remainingHeight -= sliceHeight
+        sourceY += sourceSliceHeight
+        
+        if (remainingHeight > 0) {
+          pdf.addPage()
+          position = 10
+        }
       }
     }
     
-    chrome.tabs.onUpdated.addListener(listener)
-    
-    // Clean up URL after a delay
-    setTimeout(() => URL.revokeObjectURL(url), 60000)
+    // Return as Blob
+    return pdf.output('blob')
+  } finally {
+    // Clean up temporary DOM elements
+    document.body.removeChild(container)
+  }
+}
+
+/**
+ * Export conversation to PDF and auto-download
+ * @param conversation - The conversation
+ * @param options - Export options
+ * @param filename - Filename for the downloaded file
+ */
+export async function exportToPdf(
+  conversation: Conversation,
+  options: ExportOptions,
+  filename: string
+): Promise<void> {
+  // Ensure filename has .pdf extension
+  if (!filename.endsWith('.pdf')) {
+    filename += '.pdf'
+  }
+  
+  // Generate PDF blob
+  const blob = await exportToPdfBlob(conversation, options)
+  
+  // Create object URL
+  const url = URL.createObjectURL(blob)
+  
+  try {
+    // Auto-download using chrome.downloads API
+    await chrome.downloads.download({
+      url,
+      filename,
+      saveAs: false
+    })
+  } finally {
+    // Clean up object URL
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 }
 
@@ -339,7 +466,7 @@ export async function downloadAsHtml(
   await chrome.downloads.download({
     url,
     filename,
-    saveAs: true
+    saveAs: false
   })
   
   // Clean up

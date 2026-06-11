@@ -3,7 +3,7 @@
  * Handles messages between popup and content scripts
  */
 
-import type { MessagePayload, Conversation, ExtensionSettings } from './lib/types'
+import type { MessagePayload, Conversation, ExtensionSettings, BulkExportProgress } from './lib/types'
 
 // Default settings
 const DEFAULT_SETTINGS: ExtensionSettings = {
@@ -11,7 +11,8 @@ const DEFAULT_SETTINGS: ExtensionSettings = {
   includeMetadata: true,
   includeCodeBlocks: true,
   includeImages: true,
-  theme: 'light'
+  theme: 'light',
+  filenamePattern: '{date}-{title}'
 }
 
 // Listen for extension installation
@@ -52,6 +53,12 @@ async function handleMessage(
     
     case 'DETECT_PLATFORM':
       return handleDetectPlatform(sender)
+    
+    case 'FETCH_CONVERSATION_LIST':
+      return handleFetchConversationList(sender)
+    
+    case 'BULK_EXPORT':
+      return handleBulkExport(message.data, sender)
     
     default:
       return { error: `Unknown message type: ${message.type}` }
@@ -136,6 +143,63 @@ async function handleDetectPlatform(
     }
   } catch (error) {
     return { error: 'Failed to detect platform' }
+  }
+}
+
+/**
+ * Handle fetching conversation list from content script
+ */
+async function handleFetchConversationList(
+  sender: chrome.runtime.MessageSender
+): Promise<{ data?: unknown[]; error?: string }> {
+  try {
+    if (!sender.tab?.id) {
+      return { error: 'No tab ID available' }
+    }
+    
+    // Forward request to content script
+    const response = await chrome.tabs.sendMessage(sender.tab.id, {
+      type: 'FETCH_CONVERSATION_LIST'
+    })
+    
+    return response
+  } catch (error) {
+    return { error: 'Failed to fetch conversation list' }
+  }
+}
+
+/**
+ * Handle bulk export request
+ */
+async function handleBulkExport(
+  data: { items: Array<{ id: string; title: string; url: string; platform: string }>; options: { format: string; includeMetadata: boolean; includeCodeBlocks: boolean; includeImages: boolean; filenamePattern?: string } },
+  sender: chrome.runtime.MessageSender
+): Promise<{ data?: BulkExportProgress; error?: string }> {
+  try {
+    if (!data.items || data.items.length === 0) {
+      return { error: 'No items to export' }
+    }
+    
+    const progress: BulkExportProgress = {
+      total: data.items.length,
+      completed: 0,
+      failed: 0,
+      current: '',
+      status: 'exporting'
+    }
+    
+    // Store progress for tracking
+    await chrome.storage.local.set({ bulkExportProgress: progress })
+    
+    // Broadcast progress updates
+    chrome.runtime.sendMessage({
+      type: 'BULK_EXPORT_PROGRESS',
+      data: progress
+    })
+    
+    return { data: progress }
+  } catch (error) {
+    return { error: 'Failed to start bulk export' }
   }
 }
 

@@ -3,7 +3,7 @@
  * Parses conversations from gemini.google.com using DOM reading only
  */
 
-import type { Conversation, ChatMessage, PlatformParser } from '../lib/types'
+import type { Conversation, ChatMessage, PlatformParser, ConversationListItem } from '../lib/types'
 import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
 
 /**
@@ -253,6 +253,55 @@ class GeminiParser implements PlatformParser {
     
     return undefined
   }
+  
+  /**
+   * Get list of conversations from the sidebar
+   * Reads sidebar DOM to find conversation links
+   */
+  getConversationList(): ConversationListItem[] {
+    const conversations: ConversationListItem[] = []
+    const seen = new Set<string>()
+    
+    // Gemini sidebar has navigation links to conversations
+    const selectors = [
+      'nav a[href*="/app/"]',
+      'aside a[href*="/app/"]',
+      '[class*="sidebar"] a[href*="/app/"]',
+      '[class*="history"] a[href*="/app/"]',
+      'a[href^="/app/"]'
+    ]
+    
+    for (const selector of selectors) {
+      const links = document.querySelectorAll(selector)
+      
+      links.forEach(link => {
+        const href = link.getAttribute('href')
+        if (!href) return
+        
+        // Extract conversation ID from URL
+        const match = href.match(/\/app\/([a-f0-9]+)/)
+        if (!match) return
+        
+        const id = match[1]
+        if (seen.has(id)) return
+        
+        const title = extractTextContent(link) || 'Untitled Conversation'
+        
+        seen.add(id)
+        conversations.push({
+          id,
+          title,
+          url: new URL(href, window.location.origin).href,
+          platform: 'gemini'
+        })
+      })
+      
+      // If we found conversations with this selector, stop trying others
+      if (conversations.length > 0) break
+    }
+    
+    return conversations
+  }
 }
 
 // Create parser instance
@@ -295,6 +344,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         title: parser.getConversationTitle()
       }
     })
+  }
+  
+  if (message.type === 'FETCH_CONVERSATION_LIST') {
+    try {
+      const list = parser.getConversationList()
+      sendResponse({ data: list })
+    } catch (error) {
+      sendResponse({ error: (error as Error).message })
+    }
   }
 })
 

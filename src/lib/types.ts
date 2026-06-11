@@ -79,7 +79,51 @@ export interface ExportOptions {
   includeCodeBlocks: boolean
   /** Whether to include images */
   includeImages: boolean
+  /** Filename pattern template (e.g., '{date}-{title}') */
+  filenamePattern?: string
 }
+
+/**
+ * Represents an item in the conversation list for bulk export
+ */
+export interface ConversationListItem {
+  id: string
+  title: string
+  url: string
+  platform: 'chatgpt' | 'gemini'
+}
+
+/**
+ * Tracks progress of a bulk export operation
+ */
+export interface BulkExportProgress {
+  total: number
+  completed: number
+  failed: number
+  current: string // title of current conversation being exported
+  status: 'idle' | 'fetching' | 'exporting' | 'done' | 'error'
+}
+
+/**
+ * A single filename variable option
+ */
+export interface FilenameOption {
+  key: string        // e.g. "date", "title", "platform", "index"
+  label: string      // e.g. "Date (YYYY-MM-DD)"
+  example: string    // e.g. "2026-06-11"
+}
+
+/**
+ * Available filename template variables
+ */
+export const FILENAME_OPTIONS: FilenameOption[] = [
+  { key: 'date', label: 'Date (YYYY-MM-DD)', example: '2026-06-11' },
+  { key: 'datetime', label: 'Date & Time', example: '2026-06-11T143022' },
+  { key: 'title', label: 'Conversation Title', example: 'my-chat-about-python' },
+  { key: 'platform', label: 'Platform', example: 'chatgpt' },
+  { key: 'index', label: 'Number (for bulk)', example: '001' },
+  { key: 'msgcount', label: 'Message Count', example: '24' },
+]
 
 /**
  * Platform parser interface
@@ -119,6 +163,8 @@ export interface ExtensionSettings {
   includeImages: boolean
   /** UI theme */
   theme: 'light' | 'dark'
+  /** Filename pattern template */
+  filenamePattern: string
 }
 
 /**
@@ -129,7 +175,8 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   includeMetadata: true,
   includeCodeBlocks: true,
   includeImages: true,
-  theme: 'light'
+  theme: 'light',
+  filenamePattern: '{date}-{title}'
 }
 
 /**
@@ -144,6 +191,10 @@ export type MessageType =
   | 'SETTINGS_UPDATED'
   | 'DETECT_PLATFORM'
   | 'PLATFORM_DETECTED'
+  | 'FETCH_CONVERSATION_LIST'
+  | 'CONVERSATION_LIST_FETCHED'
+  | 'BULK_EXPORT'
+  | 'BULK_EXPORT_PROGRESS'
 
 /**
  * Message payload interface

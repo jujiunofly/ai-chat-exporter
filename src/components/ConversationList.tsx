@@ -1,17 +1,19 @@
 /**
  * ConversationList Component
- * Displays a list of conversations for batch export
+ * Displays a list of conversations from sidebar for bulk export
  */
 
 import React from 'react'
-import type { Conversation } from '../lib/types'
+import type { ConversationListItem } from '../lib/types'
 
 interface ConversationListProps {
-  conversations: Conversation[]
+  conversations: ConversationListItem[]
   selectedIds: string[]
   onSelect: (id: string) => void
   onSelectAll: () => void
   onDeselectAll: () => void
+  onExport: () => void
+  loading?: boolean
 }
 
 /**
@@ -22,7 +24,9 @@ export function ConversationList({
   selectedIds,
   onSelect,
   onSelectAll,
-  onDeselectAll
+  onDeselectAll,
+  onExport,
+  loading = false
 }: ConversationListProps) {
   const allSelected = conversations.length > 0 && 
                      selectedIds.length === conversations.length
@@ -38,6 +42,9 @@ export function ConversationList({
           />
           <span>Select All ({conversations.length})</span>
         </label>
+        <span className="selected-count">
+          {selectedIds.length} selected
+        </span>
       </div>
       
       <ul className="conversation-items">
@@ -55,7 +62,7 @@ export function ConversationList({
               <div className="conversation-info">
                 <span className="title">{conv.title || 'Untitled'}</span>
                 <span className="meta">
-                  {conv.messages.length} messages • {conv.platform}
+                  {conv.platform === 'chatgpt' ? 'ChatGPT' : 'Gemini'}
                 </span>
               </div>
             </label>
@@ -65,9 +72,26 @@ export function ConversationList({
       
       {conversations.length === 0 && (
         <div className="empty-state">
-          No conversations detected on this page.
+          No conversations found in sidebar.
         </div>
       )}
+      
+      <div className="list-footer">
+        <button
+          className="export-button"
+          onClick={onExport}
+          disabled={selectedIds.length === 0 || loading}
+        >
+          {loading ? (
+            <>
+              <span className="spinner" />
+              <span>Exporting...</span>
+            </>
+          ) : (
+            <span>Export Selected ({selectedIds.length})</span>
+          )}
+        </button>
+      </div>
     </div>
   )
 }
