@@ -1,0 +1,38 @@
+{
+  "name": "ai-chat-exporter",
+  "displayName": "AI Chat Exporter",
+  "version": "1.0.0",
+  "description": "Export conversations from ChatGPT and Gemini to PDF and Markdown files",
+  "author": "AI Chat Exporter Contributors",
+  "license": "MIT",
+  "scripts": {
+    "dev": "plasmo dev",
+    "build": "plasmo build",
+    "package": "plasmo package",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "plasmo": "^0.89.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@testing-library/react": "^14.1.2",
+    "@testing-library/jest-dom": "^6.2.0",
+    "jsdom": "^24.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.2"
+  },
+  "manifest": {
+    "permissions": [
+      "storage",
+      "activeTab",
+      "downloads"
+    ]
+  }
+}

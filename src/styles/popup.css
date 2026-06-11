@@ -1,0 +1,256 @@
+/**
+ * Popup Styles
+ * Styles for the extension popup
+ */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #333;
+  background: #fff;
+  width: 350px;
+  min-height: 200px;
+}
+
+.popup {
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+}
+
+/* Header */
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f8f9fa;
+}
+
+.popup-header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.platform-badge {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.platform-badge.chatgpt {
+  background: #10a37f;
+  color: white;
+}
+
+.platform-badge.gemini {
+  background: #4285f4;
+  color: white;
+}
+
+/* Content */
+.popup-content {
+  flex: 1;
+  padding: 16px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 24px;
+  color: #666;
+}
+
+.empty-state .hint {
+  font-size: 12px;
+  color: #888;
+  margin-top: 8px;
+}
+
+/* Conversation Info */
+.conversation-info {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #f5f5f5;
+  border-radius: 8px;
+}
+
+.conversation-info h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+
+.conversation-info p {
+  font-size: 12px;
+  color: #666;
+}
+
+/* Export Button */
+.export-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  background: #2196f3;
+  color: white;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.export-button:hover:not(:disabled) {
+  background: #1976d2;
+  transform: translateY(-1px);
+}
+
+.export-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.export-button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.export-button.loading {
+  background: #9e9e9e;
+}
+
+.export-button .spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid transparent;
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.export-button .icon {
+  font-size: 16px;
+}
+
+/* Format Selector */
+.format-selector {
+  margin-bottom: 16px;
+}
+
+.selector-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.format-options {
+  display: flex;
+  gap: 8px;
+}
+
+.format-option {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.format-option:hover {
+  border-color: #2196f3;
+}
+
+.format-option.active {
+  border-color: #2196f3;
+  background: #e3f2fd;
+}
+
+.format-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.format-option .icon {
+  font-size: 16px;
+}
+
+.format-option .label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* Messages */
+.message {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.message.error {
+  background: #ffebee;
+  color: #c62828;
+  border: 1px solid #ffcdd2;
+}
+
+.message.success {
+  background: #e8f5e9;
+  color: #2e7d32;
+  border: 1px solid #c8e6c9;
+}
+
+/* Footer */
+.popup-footer {
+  padding: 12px 16px;
+  border-top: 1px solid #e0e0e0;
+  background: #f8f9fa;
+}
+
+.options-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  background: white;
+  color: #666;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.options-button:hover {
+  background: #f5f5f5;
+  color: #333;
+}

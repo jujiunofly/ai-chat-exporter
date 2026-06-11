@@ -1,0 +1,12 @@
+{
+  "extends": "plasmo/templates/tsconfig.base",
+  "exclude": [
+    "node_modules",
+    "__tests__"
+  ],
+  "include": [
+    ".plasmo/index.d.ts",
+    "src/**/*",
+    "plasmo.config.ts"
+  ]
+}
