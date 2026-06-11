@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react'
+import '../styles/print.css'
 import type { Conversation, ExportOptions } from '../lib/types'
 import { conversationToMarkdown } from '../lib/export-markdown'
 import { conversationToHtml } from '../lib/export-pdf'
@@ -68,7 +69,7 @@ export default function Preview() {
       }
       
       // Fallback: try to get active conversation
-      const allItems = await chrome.storage.local.get(null)
+      const allItems: Record<string, any> = await chrome.storage.local.get(null) as Record<string, any>
       const conversationKey = Object.keys(allItems).find(k => k.startsWith('conversation-'))
       
       if (conversationKey) {

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
+import './styles/options.css'
 import type { ExtensionSettings, ExportFormat, DownloadFolderOption } from './lib/types'
 import { DEFAULT_SETTINGS } from './lib/types'
 

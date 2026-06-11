@@ -1,9 +1,10 @@
 /**
  * Popup Component
- * Gemini-inspired layout with tab switcher, platform badge, and conversation list
+ * Gemini-designed UI with tab switcher, platform badge, and conversation list
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
+import './styles/popup.css'
 import { ExportButton } from './components/ExportButton'
 import { FormatSelector } from './components/FormatSelector'
 import { ConversationList } from './components/ConversationList'
