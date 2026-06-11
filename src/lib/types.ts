@@ -91,6 +91,10 @@ export interface ConversationListItem {
   title: string
   url: string
   platform: 'chatgpt' | 'gemini'
+  /** Optional: number of messages */
+  messageCount?: number
+  /** Optional: creation timestamp */
+  createdAt?: number
 }
 
 /**
@@ -150,6 +154,11 @@ export interface PlatformParser {
 }
 
 /**
+ * Download folder options
+ */
+export type DownloadFolderOption = 'default' | 'by-platform' | 'custom'
+
+/**
  * Extension settings stored in chrome.storage
  */
 export interface ExtensionSettings {
@@ -165,6 +174,10 @@ export interface ExtensionSettings {
   theme: 'light' | 'dark'
   /** Filename pattern template */
   filenamePattern: string
+  /** Download folder strategy */
+  downloadFolder: DownloadFolderOption
+  /** Custom folder name (used when downloadFolder is 'custom') */
+  customFolderName: string
 }
 
 /**
@@ -176,7 +189,9 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   includeCodeBlocks: true,
   includeImages: true,
   theme: 'light',
-  filenamePattern: '{date}-{title}'
+  filenamePattern: '{date}-{title}',
+  downloadFolder: 'default',
+  customFolderName: 'AI Chat Exports'
 }
 
 /**
@@ -193,6 +208,8 @@ export type MessageType =
   | 'PLATFORM_DETECTED'
   | 'FETCH_CONVERSATION_LIST'
   | 'CONVERSATION_LIST_FETCHED'
+  | 'FETCH_ALL_CONVERSATIONS'
+  | 'ALL_CONVERSATIONS_FETCHED'
   | 'BULK_EXPORT'
   | 'BULK_EXPORT_PROGRESS'
 

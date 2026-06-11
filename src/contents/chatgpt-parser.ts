@@ -1,8 +1,7 @@
 /**
  * ChatGPT DOM Parser Content Script
- * Parses conversations from chatgpt.com using DOM reading only
+ * Parses conversations from chatgpt.com using DOM reading and API-based conversation list
  */
-
 import type { Conversation, ChatMessage, PlatformParser, ConversationListItem } from '../lib/types'
 import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
 
@@ -16,8 +15,6 @@ class ChatGPTParser implements PlatformParser {
    * Check if current page is a ChatGPT conversation
    */
   isConversationPage(): boolean {
-    // ChatGPT conversation pages have article elements for messages
-    // or the main conversation container
     return !!(
       document.querySelector('[data-message-author-role]') ||
       document.querySelector('article') ||
@@ -29,7 +26,6 @@ class ChatGPTParser implements PlatformParser {
    * Get the conversation title from the page
    */
   getConversationTitle(): string {
-    // Try to get title from various possible locations
     const titleSelectors = [
       'h1',
       '[class*="title"]',
@@ -47,7 +43,6 @@ class ChatGPTParser implements PlatformParser {
       }
     }
     
-    // Fallback to page title
     const pageTitle = document.title
     return pageTitle.replace(/\s*[-–|]\s*ChatGPT.*$/i, '').trim() || 'Untitled Conversation'
   }
@@ -75,14 +70,87 @@ class ChatGPTParser implements PlatformParser {
       return null
     }
   }
-  
+
+  /**
+   * Fetch ALL conversations via the ChatGPT API (same API the browser uses when scrolling the sidebar).
+   * This gets far more conversations than the DOM-only approach.
+   */
+  async fetchAllConversations(): Promise<ConversationListItem[]> {
+    const conversations: ConversationListItem[] = []
+    let offset = 0
+    const limit = 100
+    let hasMore = true
+    let retries = 0
+    const maxRetries = 1
+
+    while (hasMore) {
+      try {
+        const response = await fetch(
+          `https://chatgpt.com/backend-api/conversations?offset=${offset}&limit=${limit}&order=updated`,
+          {
+            credentials: 'include',
+            headers: {
+              'Accept': 'application/json',
+            }
+          }
+        )
+
+        if (response.status === 401) {
+          // Token expired — retry once after a brief delay
+          if (retries < maxRetries) {
+            retries++
+            await new Promise(r => setTimeout(r, 1000))
+            continue
+          }
+          console.error('[ChatGPT Parser] Authentication expired')
+          break
+        }
+
+        if (!response.ok) {
+          console.error(`[ChatGPT Parser] API error: ${response.status}`)
+          break
+        }
+
+        const data = await response.json()
+        const items = data.items || data.conversations || []
+
+        if (items.length === 0) {
+          hasMore = false
+          break
+        }
+
+        for (const item of items) {
+          conversations.push({
+            id: item.id,
+            title: item.title || 'Untitled Conversation',
+            url: `https://chatgpt.com/c/${item.id}`,
+            platform: 'chatgpt',
+            messageCount: item.message_count || item.messageCount || undefined,
+            createdAt: item.create_time ? new Date(item.create_time).getTime() : undefined
+          })
+        }
+
+        offset += limit
+
+        // If we got fewer items than the limit, we've reached the end
+        if (items.length < limit) {
+          hasMore = false
+        }
+      } catch (error) {
+        console.error('[ChatGPT Parser] Error fetching conversations:', error)
+        break
+      }
+    }
+
+    return conversations
+  }
+
   /**
    * Extract all messages from the conversation
    */
   private extractMessages(): ChatMessage[] {
     const messages: ChatMessage[] = []
     
-    // ChatGPT uses data-message-author-role attribute
     const messageElements = document.querySelectorAll('[data-message-author-role]')
     
     if (messageElements.length > 0) {
@@ -115,7 +183,6 @@ class ChatGPTParser implements PlatformParser {
       return null
     }
     
-    // Extract content
     const contentElement = element.querySelector(
       '.markdown, [class*="markdown"], [class*="content"]'
     ) || element
@@ -126,10 +193,8 @@ class ChatGPTParser implements PlatformParser {
       return null
     }
     
-    // Extract code blocks
     const codeBlocks = extractCodeBlocks(contentElement)
     
-    // Extract images
     const imageData = extractImages(contentElement)
     const attachments = imageData.map(img => ({
       type: 'image' as const,
@@ -137,7 +202,6 @@ class ChatGPTParser implements PlatformParser {
       name: img.alt
     }))
     
-    // Generate message ID
     const messageId = element.getAttribute('data-message-id') || generateId()
     
     return {
@@ -153,7 +217,6 @@ class ChatGPTParser implements PlatformParser {
    * Parse an article element (fallback)
    */
   private parseArticleElement(element: Element): ChatMessage | null {
-    // Determine role from content or position
     const role = this.determineRoleFromArticle(element)
     if (!role) return null
     
@@ -181,12 +244,9 @@ class ChatGPTParser implements PlatformParser {
    * Determine the role of a message from an article element
    */
   private determineRoleFromArticle(element: Element): ChatMessage['role'] | null {
-    // Check for user indicators
     const hasUserIndicator = element.querySelector(
       '[class*="user"], [data-role="user"]'
     )
-    
-    // Check for assistant indicators
     const hasAssistantIndicator = element.querySelector(
       '[class*="assistant"], [data-role="assistant"], [class*="bot"]'
     )
@@ -194,12 +254,10 @@ class ChatGPTParser implements PlatformParser {
     if (hasUserIndicator) return 'user'
     if (hasAssistantIndicator) return 'assistant'
     
-    // Check aria labels
     const ariaLabel = element.getAttribute('aria-label')?.toLowerCase() || ''
     if (ariaLabel.includes('user') || ariaLabel.includes('you')) return 'user'
     if (ariaLabel.includes('assistant') || ariaLabel.includes('ai')) return 'assistant'
     
-    // Check icon/avatar presence as heuristic
     const hasUserAvatar = element.querySelector('[class*="avatar-user"]')
     const hasAssistantAvatar = element.querySelector('[class*="avatar-assistant"], [class*="logo"]')
     
@@ -213,10 +271,8 @@ class ChatGPTParser implements PlatformParser {
    * Extract clean content from a message element
    */
   private extractMessageContent(element: Element): string {
-    // Clone to avoid modifying original
     const clone = element.cloneNode(true) as Element
     
-    // Remove buttons, controls, and other UI elements
     const removeSelectors = [
       'button',
       '[class*="toolbar"]',
@@ -230,10 +286,8 @@ class ChatGPTParser implements PlatformParser {
       clone.querySelectorAll(selector).forEach(el => el.remove())
     })
     
-    // Extract text content
     let content = ''
     
-    // Process text nodes and inline elements
     const walker = document.createTreeWalker(
       clone,
       NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
@@ -242,19 +296,14 @@ class ChatGPTParser implements PlatformParser {
           if (node.nodeType === Node.TEXT_NODE) {
             return NodeFilter.FILTER_ACCEPT
           }
-          
           if (node.nodeType === Node.ELEMENT_NODE) {
             const el = node as Element
             const tag = el.tagName.toLowerCase()
-            
-            // Accept text content from these elements
             if (['p', 'span', 'div', 'strong', 'em', 'code'].includes(tag)) {
               return NodeFilter.FILTER_ACCEPT
             }
-            
             return NodeFilter.FILTER_SKIP
           }
-          
           return NodeFilter.FILTER_SKIP
         }
       }
@@ -274,7 +323,6 @@ class ChatGPTParser implements PlatformParser {
     
     content = textParts.join(' ')
     
-    // Clean up the content
     return cleanText(content)
   }
   
@@ -282,7 +330,6 @@ class ChatGPTParser implements PlatformParser {
    * Extract conversation creation timestamp
    */
   private extractCreatedAt(): number | undefined {
-    // Look for time elements or metadata
     const timeElements = document.querySelectorAll('time[datetime]')
     if (timeElements.length > 0) {
       const datetime = timeElements[0].getAttribute('datetime')
@@ -293,20 +340,16 @@ class ChatGPTParser implements PlatformParser {
         }
       }
     }
-    
     return undefined
   }
   
   /**
-   * Get list of conversations from the sidebar
-   * Reads sidebar DOM to find conversation links
+   * Get list of conversations from the sidebar (DOM-based, limited to visible items)
    */
   getConversationList(): ConversationListItem[] {
     const conversations: ConversationListItem[] = []
     const seen = new Set<string>()
     
-    // ChatGPT sidebar has nav links with conversation titles
-    // Selectors to try for sidebar conversation links
     const selectors = [
       'nav a[href*="/c/"]',
       'aside a[href*="/c/"]',
@@ -322,7 +365,6 @@ class ChatGPTParser implements PlatformParser {
         const href = link.getAttribute('href')
         if (!href) return
         
-        // Extract conversation ID from URL
         const match = href.match(/\/c\/([a-f0-9-]+)/)
         if (!match) return
         
@@ -340,7 +382,6 @@ class ChatGPTParser implements PlatformParser {
         })
       })
       
-      // If we found conversations with this selector, stop trying others
       if (conversations.length > 0) break
     }
     
@@ -361,7 +402,6 @@ async function main() {
   if (parser.isConversationPage()) {
     const conversation = await parser.parseCurrentConversation()
     if (conversation) {
-      // Store conversation data for popup access
       chrome.storage.local.set({
         [`conversation-${conversation.id}`]: conversation
       })
@@ -397,6 +437,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     } catch (error) {
       sendResponse({ error: (error as Error).message })
     }
+  }
+
+  if (message.type === 'FETCH_ALL_CONVERSATIONS') {
+    parser.fetchAllConversations().then(list => {
+      sendResponse({ data: list })
+    }).catch(error => {
+      // Fall back to DOM-based list
+      try {
+        const fallbackList = parser.getConversationList()
+        sendResponse({ data: fallbackList })
+      } catch (e) {
+        sendResponse({ error: (error as Error).message })
+      }
+    })
+    return true
   }
 })
 

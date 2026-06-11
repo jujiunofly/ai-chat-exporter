@@ -1,6 +1,6 @@
 /**
  * Preview Page Component
- * Displays exported conversation preview
+ * Gemini-inspired preview with chat bubbles and print-friendly CSS
  */
 
 import React, { useState, useEffect } from 'react'
@@ -10,8 +10,17 @@ import { conversationToHtml } from '../lib/export-pdf'
 
 type PreviewMode = 'markdown' | 'html'
 
+/** Inline SVG Icons */
+const DownloadIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+    <polyline points="7 10 12 15 17 10"></polyline>
+    <line x1="12" y1="15" x2="12" y2="3"></line>
+  </svg>
+)
+
 /**
- * Preview page for exported conversations
+ * Preview page for exported conversations with Gemini-style layout
  */
 export default function Preview() {
   const [conversation, setConversation] = useState<Conversation | null>(null)
@@ -126,62 +135,119 @@ export default function Preview() {
 
   if (loading) {
     return (
-      <div className="preview-page">
-        <div className="loading">Loading preview...</div>
+      <div className="preview-container">
+        <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          Loading preview...
+        </div>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="preview-page">
-        <div className="error">{error}</div>
+      <div className="preview-container">
+        <div style={{ padding: '40px', textAlign: 'center', color: 'var(--error)' }}>
+          {error}
+        </div>
       </div>
     )
   }
 
+  const platformName = conversation?.platform === 'chatgpt' ? 'ChatGPT' : 'Gemini'
+  const createdDate = conversation?.createdAt 
+    ? new Date(conversation.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+
   return (
-    <div className="preview-page">
-      <header className="preview-header">
-        <h1>{conversation?.title || 'Preview'}</h1>
-        
-        <div className="preview-controls">
-          <div className="mode-selector">
-            <button
-              className={mode === 'markdown' ? 'active' : ''}
-              onClick={() => setMode('markdown')}
-            >
-              Markdown
-            </button>
-            <button
-              className={mode === 'html' ? 'active' : ''}
-              onClick={() => setMode('html')}
-            >
-              HTML
-            </button>
+    <div className="preview-container">
+      {/* Header with title, metadata, and download buttons */}
+      <div className="preview-header flex justify-between items-center">
+        <div>
+          <h1 style={{ fontSize: '20px', fontWeight: 600, color: 'var(--text-primary)' }}>
+            {conversation?.title || 'Preview'}
+          </h1>
+          <div className="flex items-center gap-3 mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+            <span>{createdDate}</span>
+            <span>&bull;</span>
+            <span>{platformName}</span>
+            <span>&bull;</span>
+            <span>{conversation?.messages.length || 0} messages</span>
           </div>
-          
-          <button className="copy-button" onClick={copyToClipboard}>
+        </div>
+        <div className="flex gap-2 preview-actions">
+          <button className="btn btn-outline flex items-center gap-2" onClick={copyToClipboard}>
             Copy
           </button>
-          
-          <button className="download-button" onClick={downloadContent}>
-            Download
+          <button className="btn btn-primary flex items-center gap-2" style={{ width: 'auto' }} onClick={downloadContent}>
+            <DownloadIcon /> Download
           </button>
         </div>
-      </header>
+      </div>
 
-      <main className="preview-content">
+      {/* Mode selector */}
+      <div className="flex gap-2 p-3" style={{ borderBottom: '1px solid var(--border-light)' }}>
+        <button
+          className={`tab ${mode === 'markdown' ? 'active' : ''}`}
+          onClick={() => setMode('markdown')}
+          style={{ flex: 'none', padding: '4px 12px' }}
+        >
+          Markdown
+        </button>
+        <button
+          className={`tab ${mode === 'html' ? 'active' : ''}`}
+          onClick={() => setMode('html')}
+          style={{ flex: 'none', padding: '4px 12px' }}
+        >
+          HTML
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="preview-body">
         {mode === 'markdown' ? (
-          <pre className="markdown-preview">{content}</pre>
+          <div style={{ 
+            fontFamily: 'monospace', 
+            fontSize: '13px', 
+            lineHeight: '1.6',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            color: 'var(--text-primary)'
+          }}>
+            {content}
+          </div>
         ) : (
-          <iframe
-            className="html-preview"
-            srcDoc={content}
-            title="Preview"
-          />
+          <div className="chat-bubble ai" style={{ maxWidth: '100%' }}>
+            <div className="role-label">HTML Preview</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+              Use Download to save as HTML file
+            </div>
+          </div>
         )}
-      </main>
+
+        {/* Show chat bubble preview for markdown mode */}
+        {mode === 'markdown' && conversation && conversation.messages.length > 0 && (
+          <>
+            <div style={{ borderTop: '1px solid var(--border-light)', margin: '16px 0' }} />
+            <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '8px' }}>
+              Chat Preview:
+            </div>
+            {conversation.messages.map((msg) => (
+              <div 
+                key={msg.id} 
+                className={`chat-bubble ${msg.role === 'user' ? 'user' : 'ai'}`}
+              >
+                <div className="role-label">
+                  {msg.role === 'user' ? 'You' : platformName}
+                </div>
+                <p>{msg.content}</p>
+                {msg.codeBlocks && msg.codeBlocks.map((block, i) => (
+                  <pre key={i}><code>{block.code}</code></pre>
+                ))}
+              </div>
+            ))}
+          </>
+        )}
+      </div>
     </div>
   )
 }

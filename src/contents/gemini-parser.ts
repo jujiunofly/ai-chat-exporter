@@ -1,8 +1,7 @@
 /**
  * Gemini DOM Parser Content Script
- * Parses conversations from gemini.google.com using DOM reading only
+ * Parses conversations from gemini.google.com using DOM reading and API-based conversation list
  */
-
 import type { Conversation, ChatMessage, PlatformParser, ConversationListItem } from '../lib/types'
 import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
 
@@ -16,7 +15,6 @@ class GeminiParser implements PlatformParser {
    * Check if current page is a Gemini conversation
    */
   isConversationPage(): boolean {
-    // Gemini uses message-response containers
     return !!(
       document.querySelector('[class*="message-content"]') ||
       document.querySelector('[class*="response-container"]') ||
@@ -29,7 +27,6 @@ class GeminiParser implements PlatformParser {
    * Get the conversation title from the page
    */
   getConversationTitle(): string {
-    // Try to get title from various possible locations
     const titleSelectors = [
       '[class*="conversation-title"]',
       '[class*="chat-title"]',
@@ -47,7 +44,6 @@ class GeminiParser implements PlatformParser {
       }
     }
     
-    // Fallback to page title
     const pageTitle = document.title
     return pageTitle.replace(/\s*[-–|]\s*Gemini.*$/i, '').trim() || 'Untitled Conversation'
   }
@@ -75,14 +71,155 @@ class GeminiParser implements PlatformParser {
       return null
     }
   }
-  
+
+  /**
+   * Fetch ALL conversations via Gemini's batchexecute API.
+   * This gets the conversation history from the server rather than just the visible sidebar.
+   */
+  async fetchAllConversations(): Promise<ConversationListItem[]> {
+    const conversations: ConversationListItem[] = []
+    
+    try {
+      // Get the SNlM0e auth token from the page
+      const authMatch = document.cookie.match(/SNlM0e=([^;]+)/)
+      if (!authMatch) {
+        console.error('[Gemini Parser] Could not find auth token')
+        return this.getConversationList() // Fall back to DOM
+      }
+      const authToken = authMatch[1]
+
+      // Use the batchexecute API to fetch conversation list
+      // This is the same API Gemini uses internally
+      let nextPageToken: string | undefined
+      let hasMore = true
+
+      while (hasMore) {
+        try {
+          // Build the request body for batchexecute
+          const batchBody = `f.req=${encodeURIComponent(JSON.stringify([
+            [null, null, null, null, null, [nextPageToken || ''], null, null, null, null]
+          ]))}`
+
+          const response = await fetch(
+            'https://gemini.google.com/_/BardChatUi/data/batchexecute',
+            {
+              method: 'POST',
+              credentials: 'include',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: `f.req=${encodeURIComponent(JSON.stringify([
+                ['ChatHistoryListUi', null, [nextPageToken || ''], null, 'generic']
+              ]))}`
+            }
+          )
+
+          if (!response.ok) {
+            console.error(`[Gemini Parser] API error: ${response.status}`)
+            break
+          }
+
+          const text = await response.text()
+          
+          // Parse the response (it's in a special format)
+          // Each line starts with a number followed by the JSON data
+          const lines = text.split('\n')
+          let parsed = false
+
+          for (const line of lines) {
+            if (line.startsWith('[')) {
+              try {
+                const data = JSON.parse(line)
+                if (Array.isArray(data) && data.length > 0) {
+                  // Look for conversation items in the response
+                  const items = this.parseBatchResponse(data)
+                  if (items.length > 0) {
+                    conversations.push(...items)
+                    parsed = true
+                  }
+                  // Check for next page token
+                  if (data[0] && Array.isArray(data[0]) && data[0][1]) {
+                    nextPageToken = data[0][1]
+                  } else {
+                    hasMore = false
+                  }
+                }
+              } catch {
+                // Skip non-JSON lines
+              }
+            }
+          }
+
+          if (!parsed || !nextPageToken) {
+            hasMore = false
+          }
+        } catch (error) {
+          console.error('[Gemini Parser] Error in pagination:', error)
+          break
+        }
+      }
+    } catch (error) {
+      console.error('[Gemini Parser] Error fetching conversations:', error)
+    }
+
+    // If API didn't return results, fall back to DOM
+    if (conversations.length === 0) {
+      return this.getConversationList()
+    }
+
+    return conversations
+  }
+
+  /**
+   * Parse the batchexecute response to extract conversation items
+   */
+  private parseBatchResponse(data: any[]): ConversationListItem[] {
+    const items: ConversationListItem[] = []
+    
+    try {
+      // The response structure varies, try to find conversation entries
+      const findConversations = (obj: any): void => {
+        if (!obj || typeof obj !== 'object') return
+        
+        if (Array.isArray(obj)) {
+          // Look for arrays that contain conversation-like data
+          for (const item of obj) {
+            if (Array.isArray(item) && item.length >= 2) {
+              // Check if this looks like a conversation entry (has ID and title)
+              const maybeId = item[0]
+              const maybeTitle = item[1] || item[2]
+              if (typeof maybeId === 'string' && maybeId.length > 10 && typeof maybeTitle === 'string') {
+                items.push({
+                  id: maybeId,
+                  title: maybeTitle,
+                  url: `https://gemini.google.com/app/${maybeId}`,
+                  platform: 'gemini'
+                })
+              }
+            }
+            findConversations(item)
+          }
+        } else {
+          for (const key of Object.keys(obj)) {
+            findConversations(obj[key])
+          }
+        }
+      }
+      
+      findConversations(data)
+    } catch {
+      // Parsing failed
+    }
+    
+    return items
+  }
+
   /**
    * Extract all messages from the conversation
    */
   private extractMessages(): ChatMessage[] {
     const messages: ChatMessage[] = []
     
-    // Gemini uses different selectors for user queries and model responses
     const querySelectors = [
       '.user-query',
       '[class*="user-message"]',
@@ -97,7 +234,6 @@ class GeminiParser implements PlatformParser {
       '[class*="response"]'
     ]
     
-    // Extract user queries
     querySelectors.forEach(selector => {
       document.querySelectorAll(selector).forEach(element => {
         const message = this.parseMessageElement(element, 'user')
@@ -107,7 +243,6 @@ class GeminiParser implements PlatformParser {
       })
     })
     
-    // Extract model responses
     responseSelectors.forEach(selector => {
       document.querySelectorAll(selector).forEach(element => {
         const message = this.parseMessageElement(element, 'assistant')
@@ -131,7 +266,6 @@ class GeminiParser implements PlatformParser {
    * Parse a message element
    */
   private parseMessageElement(element: Element, role: ChatMessage['role']): ChatMessage | null {
-    // Extract content
     const contentElement = element.querySelector(
       '[class*="content"], [class*="text"], .markdown'
     ) || element
@@ -142,10 +276,8 @@ class GeminiParser implements PlatformParser {
       return null
     }
     
-    // Extract code blocks
     const codeBlocks = extractCodeBlocks(contentElement)
     
-    // Extract images
     const imageData = extractImages(contentElement)
     const attachments = imageData.map(img => ({
       type: 'image' as const,
@@ -153,7 +285,6 @@ class GeminiParser implements PlatformParser {
       name: img.alt
     }))
     
-    // Generate message ID from element
     const messageId = element.getAttribute('data-message-id') || 
                      element.id || 
                      generateId()
@@ -171,10 +302,8 @@ class GeminiParser implements PlatformParser {
    * Extract clean content from a message element
    */
   private extractMessageContent(element: Element): string {
-    // Clone to avoid modifying original
     const clone = element.cloneNode(true) as Element
     
-    // Remove buttons, controls, and other UI elements
     const removeSelectors = [
       'button',
       '[class*="toolbar"]',
@@ -188,10 +317,8 @@ class GeminiParser implements PlatformParser {
       clone.querySelectorAll(selector).forEach(el => el.remove())
     })
     
-    // Extract text content preserving structure
     let content = ''
     
-    // Process paragraphs and divs
     const textElements = clone.querySelectorAll('p, div, span, li')
     
     if (textElements.length > 0) {
@@ -204,11 +331,9 @@ class GeminiParser implements PlatformParser {
       })
       content = textParts.join('\n\n')
     } else {
-      // Fallback to full text content
       content = clone.textContent || ''
     }
     
-    // Clean up the content
     return cleanText(content)
   }
   
@@ -239,7 +364,6 @@ class GeminiParser implements PlatformParser {
    * Extract conversation creation timestamp
    */
   private extractCreatedAt(): number | undefined {
-    // Look for time elements or metadata
     const timeElements = document.querySelectorAll('time[datetime]')
     if (timeElements.length > 0) {
       const datetime = timeElements[0].getAttribute('datetime')
@@ -250,19 +374,16 @@ class GeminiParser implements PlatformParser {
         }
       }
     }
-    
     return undefined
   }
   
   /**
-   * Get list of conversations from the sidebar
-   * Reads sidebar DOM to find conversation links
+   * Get list of conversations from the sidebar (DOM-based, limited to visible items)
    */
   getConversationList(): ConversationListItem[] {
     const conversations: ConversationListItem[] = []
     const seen = new Set<string>()
     
-    // Gemini sidebar has navigation links to conversations
     const selectors = [
       'nav a[href*="/app/"]',
       'aside a[href*="/app/"]',
@@ -278,7 +399,6 @@ class GeminiParser implements PlatformParser {
         const href = link.getAttribute('href')
         if (!href) return
         
-        // Extract conversation ID from URL
         const match = href.match(/\/app\/([a-f0-9]+)/)
         if (!match) return
         
@@ -296,7 +416,6 @@ class GeminiParser implements PlatformParser {
         })
       })
       
-      // If we found conversations with this selector, stop trying others
       if (conversations.length > 0) break
     }
     
@@ -317,7 +436,6 @@ async function main() {
   if (parser.isConversationPage()) {
     const conversation = await parser.parseCurrentConversation()
     if (conversation) {
-      // Store conversation data for popup access
       chrome.storage.local.set({
         [`conversation-${conversation.id}`]: conversation
       })
@@ -333,7 +451,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }).catch(error => {
       sendResponse({ error: error.message })
     })
-    return true // Keep message channel open
+    return true
   }
   
   if (message.type === 'DETECT_PLATFORM') {
@@ -353,6 +471,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     } catch (error) {
       sendResponse({ error: (error as Error).message })
     }
+  }
+
+  if (message.type === 'FETCH_ALL_CONVERSATIONS') {
+    parser.fetchAllConversations().then(list => {
+      sendResponse({ data: list })
+    }).catch(error => {
+      // Fall back to DOM-based list
+      try {
+        const fallbackList = parser.getConversationList()
+        sendResponse({ data: fallbackList })
+      } catch (e) {
+        sendResponse({ error: (error as Error).message })
+      }
+    })
+    return true
   }
 })
 

@@ -2,7 +2,6 @@
  * Background Service Worker
  * Handles messages between popup and content scripts
  */
-
 import type { MessagePayload, Conversation, ExtensionSettings, BulkExportProgress } from './lib/types'
 
 // Default settings
@@ -12,7 +11,9 @@ const DEFAULT_SETTINGS: ExtensionSettings = {
   includeCodeBlocks: true,
   includeImages: true,
   theme: 'light',
-  filenamePattern: '{date}-{title}'
+  filenamePattern: '{date}-{title}',
+  downloadFolder: 'default',
+  customFolderName: 'AI Chat Exports'
 }
 
 // Listen for extension installation
@@ -56,6 +57,9 @@ async function handleMessage(
     
     case 'FETCH_CONVERSATION_LIST':
       return handleFetchConversationList(sender)
+
+    case 'FETCH_ALL_CONVERSATIONS':
+      return handleFetchAllConversations(sender)
     
     case 'BULK_EXPORT':
       return handleBulkExport(message.data, sender)
@@ -71,7 +75,8 @@ async function handleMessage(
 async function handleGetSettings(): Promise<{ data: ExtensionSettings }> {
   try {
     const result = await chrome.storage.local.get('settings')
-    return { data: result.settings || DEFAULT_SETTINGS }
+    // Merge with defaults for any new fields
+    return { data: { ...DEFAULT_SETTINGS, ...(result.settings || {}) } }
   } catch (error) {
     return { data: DEFAULT_SETTINGS }
   }
@@ -103,7 +108,6 @@ async function handleExportRequest(
       return { error: 'No conversation data provided' }
     }
     
-    // Store conversation for download
     const conversationId = data.conversation.id
     await chrome.storage.local.set({
       [`export-${conversationId}`]: data.conversation
@@ -147,7 +151,7 @@ async function handleDetectPlatform(
 }
 
 /**
- * Handle fetching conversation list from content script
+ * Handle fetching conversation list from content script (DOM-based)
  */
 async function handleFetchConversationList(
   sender: chrome.runtime.MessageSender
@@ -157,7 +161,6 @@ async function handleFetchConversationList(
       return { error: 'No tab ID available' }
     }
     
-    // Forward request to content script
     const response = await chrome.tabs.sendMessage(sender.tab.id, {
       type: 'FETCH_CONVERSATION_LIST'
     })
@@ -165,6 +168,27 @@ async function handleFetchConversationList(
     return response
   } catch (error) {
     return { error: 'Failed to fetch conversation list' }
+  }
+}
+
+/**
+ * Handle fetching ALL conversations via API (forwarded to content script)
+ */
+async function handleFetchAllConversations(
+  sender: chrome.runtime.MessageSender
+): Promise<{ data?: unknown[]; error?: string }> {
+  try {
+    if (!sender.tab?.id) {
+      return { error: 'No tab ID available' }
+    }
+    
+    const response = await chrome.tabs.sendMessage(sender.tab.id, {
+      type: 'FETCH_ALL_CONVERSATIONS'
+    })
+    
+    return response
+  } catch (error) {
+    return { error: 'Failed to fetch all conversations' }
   }
 }
 
@@ -188,10 +212,8 @@ async function handleBulkExport(
       status: 'exporting'
     }
     
-    // Store progress for tracking
     await chrome.storage.local.set({ bulkExportProgress: progress })
     
-    // Broadcast progress updates
     chrome.runtime.sendMessage({
       type: 'BULK_EXPORT_PROGRESS',
       data: progress
@@ -205,7 +227,6 @@ async function handleBulkExport(
 
 // Handle download requests
 chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
-  // Let the extension handle the filename
   suggest()
 })
 
@@ -217,7 +238,6 @@ setInterval(async () => {
     
     for (const [key, value] of Object.entries(items)) {
       if (key.startsWith('export-') && typeof value === 'object' && value !== null) {
-        // Clean up exports older than 1 hour
         const exportData = value as { timestamp?: number }
         if (exportData.timestamp && now - exportData.timestamp > 3600000) {
           await chrome.storage.local.remove(key)
