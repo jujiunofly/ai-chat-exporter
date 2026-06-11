@@ -96,6 +96,33 @@ class ChatGPTParser implements PlatformParser {
   }
 
   /**
+   * Get a ChatGPT access token by calling the session endpoint.
+   * Caches the token in chrome.storage.sync so subsequent calls reuse it.
+   */
+  private async getAccessToken(): Promise<string> {
+    // Try cached token first
+    const cached = await chrome.storage.sync.get(['chatGPTAccessToken'])
+    if (cached.chatGPTAccessToken) return cached.chatGPTAccessToken
+
+    // Fetch new token from session endpoint
+    const response = await fetch('https://chatgpt.com/api/auth/session')
+    if (response.status === 403) throw new Error('Forbidden')
+    const data = await response.json()
+    if (!data.accessToken) throw new Error('No access token in response')
+
+    // Cache it
+    await chrome.storage.sync.set({ chatGPTAccessToken: data.accessToken })
+    return data.accessToken
+  }
+
+  /**
+   * Clear cached access token (call on 401)
+   */
+  private async resetAccessToken(): Promise<void> {
+    await chrome.storage.sync.remove('chatGPTAccessToken')
+  }
+
+  /**
    * Fetch ALL conversations via the ChatGPT API (same API the browser uses when scrolling the sidebar).
    * This gets far more conversations than the DOM-only approach.
    */
@@ -107,6 +134,9 @@ class ChatGPTParser implements PlatformParser {
     let retries = 0
     const maxRetries = 1
 
+    // Get access token for Authorization header
+    const token = await this.getAccessToken()
+
     while (hasMore) {
       try {
         const response = await fetch(
@@ -115,15 +145,20 @@ class ChatGPTParser implements PlatformParser {
             credentials: 'include',
             headers: {
               'Accept': 'application/json',
+              'Authorization': 'Bearer ' + token,
+              'oai-language': 'en-US',
+              'sec-fetch-dest': 'empty',
+              'sec-fetch-mode': 'cors',
+              'sec-fetch-site': 'same-origin',
             }
           }
         )
 
         if (response.status === 401) {
-          // Token expired — retry once after a brief delay
+          // Token expired — reset and get a new one, retry
           if (retries < maxRetries) {
             retries++
-            await new Promise(r => setTimeout(r, 1000))
+            await this.resetAccessToken()
             continue
           }
           console.error('[ChatGPT Parser] Authentication expired')
@@ -175,15 +210,27 @@ class ChatGPTParser implements PlatformParser {
    */
   async fetchConversationDetail(id: string): Promise<Conversation | null> {
     try {
+      const token = await this.getAccessToken()
       const response = await fetch(
         `https://chatgpt.com/backend-api/conversation/${id}`,
         {
           credentials: 'include',
           headers: {
             'Accept': 'application/json',
+            'Authorization': 'Bearer ' + token,
+            'oai-language': 'en-US',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-origin',
           }
         }
       )
+
+      if (response.status === 401) {
+        await this.resetAccessToken()
+        console.error(`[ChatGPT Parser] Auth expired for conversation ${id}`)
+        return null
+      }
 
       if (!response.ok) {
         console.error(`[ChatGPT Parser] Failed to fetch conversation ${id}: ${response.status}`)

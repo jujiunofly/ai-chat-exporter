@@ -92,7 +92,30 @@ class GeminiParser implements PlatformParser {
    * Gemini stores it in a script tag, not in cookies.
    */
   private getAuthToken(): string | null {
-    // Try to find the token in page scripts
+    // 1. Try window.__WIZ_global_data (most reliable in newer Gemini)
+    try {
+      const wizData = (window as any).__WIZ_global_data
+      if (wizData && wizData.SNlM0e) {
+        return wizData.SNlM0e
+      }
+    } catch {
+      // Not available
+    }
+
+    // 2. Try document.cookie for SNlM0e
+    try {
+      const cookies = document.cookie.split(';')
+      for (const cookie of cookies) {
+        const [name, value] = cookie.trim().split('=')
+        if (name === 'SNlM0e' && value) {
+          return value
+        }
+      }
+    } catch {
+      // Cookies not accessible
+    }
+
+    // 3. Try to find the token in page scripts
     const scripts = document.querySelectorAll('script')
     for (const script of scripts) {
       const text = script.textContent || ''
@@ -102,16 +125,19 @@ class GeminiParser implements PlatformParser {
         return match[1]
       }
     }
-    // Fallback: try to find a hidden input with the token
+
+    // 4. Fallback: try to find a hidden input with the token
     const input = document.querySelector('input[name="SNlM0e"]') as HTMLInputElement
     if (input) {
       return input.value
     }
-    // Fallback: try meta tag
+
+    // 5. Fallback: try meta tag
     const meta = document.querySelector('meta[name="SNlM0e"]')
     if (meta) {
       return meta.getAttribute('content')
     }
+
     return null
   }
 
@@ -458,13 +484,7 @@ class GeminiParser implements PlatformParser {
       }
     }
     
-    // Sort by DOM position
-    messages.sort((a, b) => {
-      const posA = this.getElementPosition(a.id)
-      const posB = this.getElementPosition(b.id)
-      return posA - posB
-    })
-    
+    // querySelectorAll already returns elements in DOM order — no sort needed
     return messages
   }
   
@@ -543,28 +563,7 @@ class GeminiParser implements PlatformParser {
     return cleanText(content)
   }
   
-  /**
-   * Get element position in the document
-   */
-  private getElementPosition(elementId: string): number {
-    const element = document.getElementById(elementId)
-    if (!element) return 0
-    
-    let position = 0
-    let current: Element | null = element
-    
-    while (current) {
-      const prev = current.previousElementSibling
-      if (prev) {
-        position++
-        current = prev
-      } else {
-        current = current.parentElement
-      }
-    }
-    
-    return position
-  }
+  // getElementPosition removed — querySelectorAll already returns DOM order
   
   /**
    * Extract conversation creation timestamp

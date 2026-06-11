@@ -11,7 +11,7 @@ const config: PlasmoConfig = {
       js: ["src/contents/gemini-parser.ts"]
     }
   ],
-  permissions: ["storage", "activeTab", "downloads"]
+  permissions: ["storage", "activeTab", "downloads", "alarms"]
 }
 
 export default config

@@ -67,13 +67,17 @@ export default function Options() {
     saveSettings({ ...settings, [key]: value })
   }
 
+  const now = new Date()
   const previewFilename = settings.filenamePattern
-    .replace(/\{date\}/g, new Date().toISOString().split('T')[0])
+    .replace(/\{date\}/g, now.toISOString().split('T')[0])
     .replace(/\{title\}/g, 'my-chat')
     .replace(/\{platform\}/g, 'chatgpt')
     .replace(/\{index\}/g, '001')
     .replace(/\{msgcount\}/g, '24')
-    .replace(/\{datetime\}/g, new Date().toISOString().replace(/[:.]/g, '').split('T').join('T').substring(0, 19))
+    .replace(/\{datetime\}/g, now.toISOString().replace(/[:.]/g, '').split('T').join('T').substring(0, 19))
+    .replace(/\{conv_date\}/g, '2026-06-08')
+    .replace(/\{conv_datetime\}/g, '2026-06-08T093000')
+    .replace(/\{end_date\}/g, now.toISOString().split('T')[0])
 
   return (
     <div className="options-container">
