@@ -59,7 +59,8 @@ function generateMetadataHeader(conversation: Conversation): string[] {
     lines.push(`- **Created:** ${date.toLocaleString()}`)
   }
   
-  return lines.push('') && lines
+  lines.push('')
+  return lines
 }
 
 /**

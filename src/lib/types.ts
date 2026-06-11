@@ -121,8 +121,11 @@ export interface FilenameOption {
  * Available filename template variables
  */
 export const FILENAME_OPTIONS: FilenameOption[] = [
-  { key: 'date', label: 'Date (YYYY-MM-DD)', example: '2026-06-11' },
-  { key: 'datetime', label: 'Date & Time', example: '2026-06-11T143022' },
+  { key: 'date', label: 'Export Date (YYYY-MM-DD)', example: '2026-06-11' },
+  { key: 'datetime', label: 'Export Date & Time', example: '2026-06-11T143022' },
+  { key: 'end_date', label: 'Current/Export Date', example: '2026-06-11' },
+  { key: 'conv_date', label: 'Conversation Date (start)', example: '2026-05-20' },
+  { key: 'conv_datetime', label: 'Conversation Date & Time (start)', example: '2026-05-20T103000' },
   { key: 'title', label: 'Conversation Title', example: 'my-chat-about-python' },
   { key: 'platform', label: 'Platform', example: 'chatgpt' },
   { key: 'index', label: 'Number (for bulk)', example: '001' },
@@ -210,6 +213,7 @@ export type MessageType =
   | 'CONVERSATION_LIST_FETCHED'
   | 'FETCH_ALL_CONVERSATIONS'
   | 'ALL_CONVERSATIONS_FETCHED'
+  | 'FETCH_CONVERSATION_DETAIL'
   | 'BULK_EXPORT'
   | 'BULK_EXPORT_PROGRESS'
 

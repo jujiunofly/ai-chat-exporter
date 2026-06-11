@@ -24,27 +24,51 @@ class ChatGPTParser implements PlatformParser {
   
   /**
    * Get the conversation title from the page
+   * Strategy:
+   * 1. Parse document.title (most reliable: "Conversation Title - ChatGPT")
+   * 2. Try sidebar link matching the current URL
+   * 3. Fall back to first user message
+   * 4. Last resort: "Untitled Conversation"
    */
   getConversationTitle(): string {
-    const titleSelectors = [
-      'h1',
-      '[class*="title"]',
-      'title',
-      '.conversation-title'
-    ]
-    
-    for (const selector of titleSelectors) {
-      const element = document.querySelector(selector)
-      if (element) {
-        const text = extractTextContent(element)
-        if (text && text !== 'ChatGPT') {
-          return text
+    // 1. Parse document.title — most reliable for ChatGPT
+    const pageTitle = document.title
+    if (pageTitle) {
+      // ChatGPT formats titles as "Conversation Title - ChatGPT"
+      const cleaned = pageTitle.replace(/\s*[-–|]\s*ChatGPT.*$/i, '').trim()
+      if (cleaned && cleaned !== 'ChatGPT' && cleaned.length > 0) {
+        return cleaned
+      }
+    }
+
+    // 2. Try to find the title in the sidebar link matching current conversation URL
+    const currentPath = window.location.pathname
+    const match = currentPath.match(/\/c\/([a-f0-9-]+)/)
+    if (match) {
+      const convId = match[1]
+      const sidebarLinks = document.querySelectorAll('a[href*="/c/"]')
+      for (const link of sidebarLinks) {
+        const href = link.getAttribute('href') || ''
+        if (href.includes(convId)) {
+          const text = extractTextContent(link)
+          if (text && text !== 'ChatGPT' && text.length > 0) {
+            return text
+          }
         }
       }
     }
+
+    // 3. Try first user message as fallback
+    const firstUserMsg = document.querySelector('[data-message-author-role="user"]')
+    if (firstUserMsg) {
+      const text = extractTextContent(firstUserMsg)
+      if (text && text.length > 0) {
+        // Truncate to reasonable length for a title
+        return text.length > 80 ? text.substring(0, 80) + '...' : text
+      }
+    }
     
-    const pageTitle = document.title
-    return pageTitle.replace(/\s*[-–|]\s*ChatGPT.*$/i, '').trim() || 'Untitled Conversation'
+    return 'Untitled Conversation'
   }
   
   /**
@@ -146,24 +170,127 @@ class ChatGPTParser implements PlatformParser {
   }
 
   /**
+   * Fetch full conversation detail from the ChatGPT API.
+   * Returns a complete Conversation object with messages.
+   */
+  async fetchConversationDetail(id: string): Promise<Conversation | null> {
+    try {
+      const response = await fetch(
+        `https://chatgpt.com/backend-api/conversation/${id}`,
+        {
+          credentials: 'include',
+          headers: {
+            'Accept': 'application/json',
+          }
+        }
+      )
+
+      if (!response.ok) {
+        console.error(`[ChatGPT Parser] Failed to fetch conversation ${id}: ${response.status}`)
+        return null
+      }
+
+      const data = await response.json()
+      const messages: ChatMessage[] = []
+
+      // ChatGPT API returns a tree of messages with mapping
+      if (data.mapping) {
+        // Walk the mapping to extract messages in order
+        const nodeMap: Record<string, any> = data.mapping
+        // Find the root node (no parent)
+        let rootNode: any = null
+        for (const key of Object.keys(nodeMap)) {
+          const node = nodeMap[key]
+          if (!node.parent) {
+            rootNode = node
+            break
+          }
+        }
+
+        // Walk from root to leaf, collecting messages
+        const walkMessages = (node: any) => {
+          if (!node) return
+          if (node.message) {
+            const msg = node.message
+            const role = msg.author?.role
+            if (role === 'user' || role === 'assistant') {
+              const content = msg.content?.parts?.join('\n') || ''
+              if (content.trim()) {
+                messages.push({
+                  id: msg.id || generateId(),
+                  role: role as ChatMessage['role'],
+                  content: content.trim(),
+                })
+              }
+            }
+          }
+          // Follow children (pick first child for linear order)
+          if (node.children && node.children.length > 0) {
+            for (const childId of node.children) {
+              walkMessages(nodeMap[childId])
+            }
+          }
+        }
+
+        walkMessages(rootNode)
+      }
+
+      // Fallback: try flat messages array
+      if (messages.length === 0 && data.messages) {
+        for (const msg of data.messages) {
+          const role = msg.author?.role || msg.role
+          if (role === 'user' || role === 'assistant') {
+            const content = msg.content?.parts?.join('\n') || msg.content || ''
+            if (content.trim()) {
+              messages.push({
+                id: msg.id || generateId(),
+                role: role as ChatMessage['role'],
+                content: typeof content === 'string' ? content.trim() : String(content).trim(),
+              })
+            }
+          }
+        }
+      }
+
+      return {
+        id: data.id || id,
+        title: data.title || this.getConversationTitle(),
+        url: `https://chatgpt.com/c/${id}`,
+        messages,
+        createdAt: data.create_time ? new Date(data.create_time).getTime() : undefined,
+        platform: 'chatgpt'
+      }
+    } catch (error) {
+      console.error(`[ChatGPT Parser] Error fetching conversation detail:`, error)
+      return null
+    }
+  }
+  
+  /**
    * Extract all messages from the conversation
+   * Uses deduplication to avoid counting the same message twice
    */
   private extractMessages(): ChatMessage[] {
     const messages: ChatMessage[] = []
+    const seenElements = new Set<Element>()
     
     const messageElements = document.querySelectorAll('[data-message-author-role]')
     
     if (messageElements.length > 0) {
       messageElements.forEach(element => {
+        if (seenElements.has(element)) return
+        seenElements.add(element)
         const message = this.parseMessageElement(element)
         if (message) {
           messages.push(message)
         }
       })
     } else {
-      // Fallback: try article elements
+      // Fallback: try article elements only if no data-message-author-role found
       const articles = document.querySelectorAll('article')
       articles.forEach(article => {
+        if (seenElements.has(article)) return
+        seenElements.add(article)
         const message = this.parseArticleElement(article)
         if (message) {
           messages.push(message)
@@ -450,6 +577,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       } catch (e) {
         sendResponse({ error: (error as Error).message })
       }
+    })
+    return true
+  }
+
+  if (message.type === 'FETCH_CONVERSATION_DETAIL') {
+    parser.fetchConversationDetail(message.data?.id).then(conversation => {
+      sendResponse({ data: conversation })
+    }).catch(error => {
+      sendResponse({ error: error.message })
     })
     return true
   }

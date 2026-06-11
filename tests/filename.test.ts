@@ -114,6 +114,9 @@ describe('Filename Generation', () => {
       
       expect(FILENAME_PREVIEW_VARS.date).toBeDefined()
       expect(FILENAME_PREVIEW_VARS.datetime).toBeDefined()
+      expect(FILENAME_PREVIEW_VARS.end_date).toBeDefined()
+      expect(FILENAME_PREVIEW_VARS.conv_date).toBeDefined()
+      expect(FILENAME_PREVIEW_VARS.conv_datetime).toBeDefined()
       expect(FILENAME_PREVIEW_VARS.title).toBeDefined()
       expect(FILENAME_PREVIEW_VARS.platform).toBeDefined()
       expect(FILENAME_PREVIEW_VARS.index).toBeDefined()
@@ -133,6 +136,35 @@ describe('Filename Generation', () => {
       
       // ISO datetime with milliseconds removed, format: YYYY-MM-DDTHHmmss.sssZ -> YYYY-MM-DDTHHmmss
       expect(datetime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}/)
+    })
+
+    it('should generate end_date preview (same as date)', () => {
+      const conv = createConversation()
+      const endDate = FILENAME_PREVIEW_VARS.end_date(conv)
+      const date = FILENAME_PREVIEW_VARS.date(conv)
+      
+      expect(endDate).toBe(date)
+    })
+
+    it('should generate conv_date preview from createdAt', () => {
+      const conv = createConversation({ createdAt: new Date('2025-03-15T10:30:00Z').getTime() })
+      const convDate = FILENAME_PREVIEW_VARS.conv_date(conv)
+      
+      expect(convDate).toBe('2025-03-15')
+    })
+
+    it('should generate conv_date fallback to current date when no createdAt', () => {
+      const conv = createConversation()
+      const convDate = FILENAME_PREVIEW_VARS.conv_date(conv)
+      
+      expect(convDate).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    })
+
+    it('should generate conv_datetime preview from createdAt', () => {
+      const conv = createConversation({ createdAt: new Date('2025-03-15T10:30:00Z').getTime() })
+      const convDatetime = FILENAME_PREVIEW_VARS.conv_datetime(conv)
+      
+      expect(convDatetime).toMatch(/^2025-03-15T/)
     })
 
     it('should generate title preview', () => {
@@ -161,6 +193,43 @@ describe('Filename Generation', () => {
       const msgcount = FILENAME_PREVIEW_VARS.msgcount(conv)
       
       expect(msgcount).toBe('2')
+    })
+  })
+
+  describe('Conversation Date Tokens', () => {
+    it('should use conv_date in filename pattern', () => {
+      const conv = createConversation({ 
+        title: 'My Test Conversation',
+        createdAt: new Date('2025-01-20T08:00:00Z').getTime() 
+      })
+      const filename = generateFilename('{conv_date}-{title}', conv)
+      
+      expect(filename).toMatch(/^2025-01-20-my-test-conversation$/)
+    })
+
+    it('should use conv_datetime in filename pattern', () => {
+      const conv = createConversation({ 
+        title: 'My Test Conversation',
+        createdAt: new Date('2025-01-20T08:00:00Z').getTime() 
+      })
+      const filename = generateFilename('{conv_datetime}-{title}', conv)
+      
+      // T gets lowercased to t by sanitizeFilename
+      expect(filename).toMatch(/^2025-01-20t\d{6}-my-test-conversation$/)
+    })
+
+    it('should use end_date in filename pattern', () => {
+      const conv = createConversation({ title: 'My Test Conversation' })
+      const filename = generateFilename('{end_date}-{title}', conv)
+      
+      expect(filename).toMatch(/^\d{4}-\d{2}-\d{2}-my-test-conversation$/)
+    })
+
+    it('should fallback conv_date to current date when no createdAt', () => {
+      const conv = createConversation({ title: 'My Test Conversation' })
+      const filename = generateFilename('{conv_date}-{title}', conv)
+      
+      expect(filename).toMatch(/^\d{4}-\d{2}-\d{2}-my-test-conversation$/)
     })
   })
 })

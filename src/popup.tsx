@@ -76,8 +76,14 @@ function buildDownloadFilename(
       const folder = platform === 'chatgpt' ? 'ChatGPT' : 'Gemini'
       return `${folder}/${filename}`
     }
-    case 'custom':
-      return `${customFolderName}/${filename}`
+    case 'custom': {
+      const safeFolder = customFolderName
+        .replace(/[\\:*?"<>|]/g, '_')
+        .replace(/^\.\./, '')
+        .replace(/^-|-$/g, '')
+        .substring(0, 100) || 'AI Chat Exports'
+      return `${safeFolder}/${filename}`
+    }
     default:
       return filename
   }
@@ -113,17 +119,21 @@ export default function Popup() {
     loadSettings()
   }, [])
 
-  // Detect platform and conversation when tab changes
+  // Detect platform and conversation when tab changes (debounced)
   useEffect(() => {
     detectPlatformAndConversation()
     
-    // Listen for tab updates
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
     const handleTabUpdate = () => {
-      detectPlatformAndConversation()
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => detectPlatformAndConversation(), 300)
     }
     
     chrome.tabs.onUpdated.addListener(handleTabUpdate)
-    return () => chrome.tabs.onUpdated.removeListener(handleTabUpdate)
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      chrome.tabs.onUpdated.removeListener(handleTabUpdate)
+    }
   }, [])
 
   /**
@@ -238,6 +248,8 @@ export default function Popup() {
       const downloadFolder = settings?.downloadFolder ?? 'default'
       const customFolderName = settings?.customFolderName ?? 'AI Chat Exports'
 
+      const clearSuccess = () => setTimeout(() => setSuccess(null), 3000)
+
       if (format === 'markdown') {
         const markdown = conversationToMarkdown(conversation, exportOptions)
         const filename = buildDownloadFilename(baseFilename, conversation.platform, '.md', downloadFolder, customFolderName)
@@ -252,12 +264,14 @@ export default function Popup() {
           saveAs: false
         })
         
-        URL.revokeObjectURL(url)
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
         setSuccess('Exported as Markdown!')
+        clearSuccess()
       } else {
         const filename = buildDownloadFilename(baseFilename, conversation.platform, '.pdf', downloadFolder, customFolderName)
         await exportToPdf(conversation, exportOptions, filename)
         setSuccess('PDF exported successfully!')
+        clearSuccess()
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export failed')
@@ -315,20 +329,36 @@ export default function Popup() {
         }))
 
         try {
-          const mockConv: Conversation = {
-            id: convItem.id,
-            title: convItem.title,
-            url: convItem.url,
-            messages: [],
-            platform: convItem.platform
+          // Fetch real conversation data from the API
+          let conv: Conversation | null = null
+          try {
+            const response = await chrome.tabs.sendMessage(tab.id, {
+              type: 'FETCH_CONVERSATION_DETAIL',
+              data: { id: convItem.id }
+            })
+            conv = response?.data || null
+          } catch {
+            // If fetch fails, create a minimal conversation with metadata
+          }
+
+          // Fallback: if we couldn't fetch details, use list item data
+          if (!conv) {
+            conv = {
+              id: convItem.id,
+              title: convItem.title,
+              url: convItem.url,
+              messages: [],
+              platform: convItem.platform,
+              createdAt: convItem.createdAt
+            }
           }
 
           const baseFilename = settings?.filenamePattern
-            ? generateFilename(settings.filenamePattern, mockConv, i + 1)
-            : `${convItem.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 50)}`
+            ? generateFilename(settings.filenamePattern, conv, i + 1)
+            : `${conv.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 50)}`
 
           if (format === 'markdown') {
-            const markdown = conversationToMarkdown(mockConv, exportOptions)
+            const markdown = conversationToMarkdown(conv, exportOptions)
             const filename = buildDownloadFilename(baseFilename, convItem.platform, '.md', downloadFolder, customFolderName)
             const blob = new Blob([markdown], { type: 'text/markdown' })
             const url = URL.createObjectURL(blob)
@@ -339,10 +369,10 @@ export default function Popup() {
               saveAs: false
             })
             
-            URL.revokeObjectURL(url)
+            setTimeout(() => URL.revokeObjectURL(url), 1000)
           } else {
             const filename = buildDownloadFilename(baseFilename, convItem.platform, '.pdf', downloadFolder, customFolderName)
-            await exportToPdf(mockConv, exportOptions, filename)
+            await exportToPdf(conv, exportOptions, filename)
           }
 
           setBulkProgress(prev => ({

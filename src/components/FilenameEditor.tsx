@@ -75,7 +75,7 @@ export function FilenameEditor({
           <span className="text-sm" style={{ fontFamily: 'monospace' }}>{value}</span>
           <EditIcon />
         </div>
-        <span className="text-xs text-muted">Preview: {preview}.md</span>
+        <span className="text-xs text-muted">Preview: {preview}</span>
       </div>
     )
   }
@@ -112,7 +112,7 @@ export function FilenameEditor({
       </div>
       <div className="flex items-center gap-2">
         <div className="text-xs mt-2 p-2 flex-1" style={{ background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', fontFamily: 'monospace' }}>
-          → {preview}.md
+          → {preview}
         </div>
         <button
           className="btn btn-outline mt-2"

@@ -19,17 +19,60 @@ function sanitizeFilename(text: string): string {
 }
 
 /**
+ * Get a date string as YYYY-MM-DD from a Date or timestamp
+ */
+function formatDate(date: Date): string {
+  return date.toISOString().split('T')[0]
+}
+
+/**
+ * Get a date and time string as YYYY-MM-DDTHHmmss from a Date or timestamp
+ * Uses 'T' separator which gets lowercased in filenames to 't'
+ */
+function formatDateTime(date: Date): string {
+  const iso = date.toISOString()
+  // Extract YYYY-MM-DDTHHmmss from ISO string, dropping milliseconds and timezone
+  const match = iso.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/)
+  if (match) {
+    return match[1] + 'T' + match[2].replace(/:/g, '')
+  }
+  return iso.replace(/[:.]/g, '').split('T').join('T').substring(0, 19)
+}
+
+/**
  * Get the current date as YYYY-MM-DD
  */
 function getDateStr(): string {
-  return new Date().toISOString().split('T')[0]
+  return formatDate(new Date())
 }
 
 /**
  * Get the current date and time as YYYY-MM-DDTHHmmss
  */
 function getDateTimeStr(): string {
-  return new Date().toISOString().replace(/[:.]/g, '').split('T').join('T')
+  return formatDateTime(new Date())
+}
+
+/**
+ * Get a conversation date string from createdAt timestamp
+ * Falls back to current date if createdAt is not available
+ */
+function getConvDateStr(conversation: Conversation): string {
+  if (conversation.createdAt) {
+    return formatDate(new Date(conversation.createdAt))
+  }
+  return getDateStr()
+}
+
+/**
+ * Get a conversation date and time string from createdAt timestamp
+ * Falls back to current date/time if createdAt is not available
+ */
+function getConvDateTimeStr(conversation: Conversation): string {
+  if (conversation.createdAt) {
+    return formatDateTime(new Date(conversation.createdAt))
+  }
+  return getDateTimeStr()
 }
 
 /**
@@ -47,6 +90,9 @@ export function generateFilename(
   const vars: Record<string, string> = {
     date: getDateStr(),
     datetime: getDateTimeStr(),
+    end_date: getDateStr(),
+    conv_date: getConvDateStr(conversation),
+    conv_datetime: getConvDateTimeStr(conversation),
     title: sanitizeFilename(conversation.title || 'untitled'),
     platform: conversation.platform,
     index: index !== undefined ? String(index).padStart(3, '0') : '000',
@@ -81,6 +127,9 @@ export function getDefaultPattern(): string {
 export const FILENAME_PREVIEW_VARS: Record<string, (conv: Conversation) => string> = {
   date: () => getDateStr(),
   datetime: () => getDateTimeStr(),
+  end_date: () => getDateStr(),
+  conv_date: (conv) => getConvDateStr(conv),
+  conv_datetime: (conv) => getConvDateTimeStr(conv),
   title: (conv) => sanitizeFilename(conv.title || 'untitled'),
   platform: (conv) => conv.platform,
   index: () => '001',

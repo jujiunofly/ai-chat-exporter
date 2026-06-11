@@ -61,9 +61,6 @@ async function handleMessage(
     case 'FETCH_ALL_CONVERSATIONS':
       return handleFetchAllConversations(sender)
     
-    case 'BULK_EXPORT':
-      return handleBulkExport(message.data, sender)
-    
     default:
       return { error: `Unknown message type: ${message.type}` }
   }
@@ -192,54 +189,23 @@ async function handleFetchAllConversations(
   }
 }
 
-/**
- * Handle bulk export request
- */
-async function handleBulkExport(
-  data: { items: Array<{ id: string; title: string; url: string; platform: string }>; options: { format: string; includeMetadata: boolean; includeCodeBlocks: boolean; includeImages: boolean; filenamePattern?: string } },
-  sender: chrome.runtime.MessageSender
-): Promise<{ data?: BulkExportProgress; error?: string }> {
-  try {
-    if (!data.items || data.items.length === 0) {
-      return { error: 'No items to export' }
-    }
-    
-    const progress: BulkExportProgress = {
-      total: data.items.length,
-      completed: 0,
-      failed: 0,
-      current: '',
-      status: 'exporting'
-    }
-    
-    await chrome.storage.local.set({ bulkExportProgress: progress })
-    
-    chrome.runtime.sendMessage({
-      type: 'BULK_EXPORT_PROGRESS',
-      data: progress
-    })
-    
-    return { data: progress }
-  } catch (error) {
-    return { error: 'Failed to start bulk export' }
-  }
-}
-
 // Handle download requests
 chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   suggest()
 })
 
-// Clean up old exports periodically
-setInterval(async () => {
+// Clean up old exports via chrome.alarms (MV3 compatible)
+chrome.alarms.create('cleanup-exports', { periodInMinutes: 60 })
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'cleanup-exports') return
   try {
     const items = await chrome.storage.local.get(null)
     const now = Date.now()
     
     for (const [key, value] of Object.entries(items)) {
-      if (key.startsWith('export-') && typeof value === 'object' && value !== null) {
-        const exportData = value as { timestamp?: number }
-        if (exportData.timestamp && now - exportData.timestamp > 3600000) {
+      if ((key.startsWith('export-') || key.startsWith('conversation-')) && typeof value === 'object' && value !== null) {
+        const data = value as { timestamp?: number }
+        if (data.timestamp && now - data.timestamp > 3600000) {
           await chrome.storage.local.remove(key)
         }
       }
@@ -247,4 +213,4 @@ setInterval(async () => {
   } catch (error) {
     // Silently handle cleanup errors
   }
-}, 3600000) // Run every hour
+})

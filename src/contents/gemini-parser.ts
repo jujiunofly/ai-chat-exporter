@@ -25,27 +25,42 @@ class GeminiParser implements PlatformParser {
   
   /**
    * Get the conversation title from the page
+   * Strategy:
+   * 1. Parse document.title (most reliable: "Conversation Title - Gemini")
+   * 2. Try conversation-title class
+   * 3. Try first user message as fallback
+   * 4. Last resort: "Untitled Conversation"
    */
   getConversationTitle(): string {
-    const titleSelectors = [
-      '[class*="conversation-title"]',
-      '[class*="chat-title"]',
-      'h1',
-      'title'
-    ]
-    
-    for (const selector of titleSelectors) {
-      const element = document.querySelector(selector)
-      if (element) {
-        const text = extractTextContent(element)
-        if (text && text !== 'Gemini') {
-          return text
-        }
+    // 1. Parse document.title — most reliable for Gemini
+    const pageTitle = document.title
+    if (pageTitle) {
+      // Gemini formats titles as "Conversation Title - Gemini"
+      const cleaned = pageTitle.replace(/\s*[-–|]\s*Gemini.*$/i, '').trim()
+      if (cleaned && cleaned !== 'Gemini' && cleaned.length > 0) {
+        return cleaned
+      }
+    }
+
+    // 2. Try conversation-title class
+    const titleEl = document.querySelector('[class*="conversation-title"]')
+    if (titleEl) {
+      const text = extractTextContent(titleEl)
+      if (text && text !== 'Gemini' && text.length > 0) {
+        return text
       }
     }
     
-    const pageTitle = document.title
-    return pageTitle.replace(/\s*[-–|]\s*Gemini.*$/i, '').trim() || 'Untitled Conversation'
+    // 3. Try first user message as fallback
+    const firstUserMsg = document.querySelector('.user-query, [class*="user-message"], [data-message-author-role="user"]')
+    if (firstUserMsg) {
+      const text = extractTextContent(firstUserMsg)
+      if (text && text.length > 0) {
+        return text.length > 80 ? text.substring(0, 80) + '...' : text
+      }
+    }
+    
+    return 'Untitled Conversation'
   }
   
   /**
@@ -73,46 +88,82 @@ class GeminiParser implements PlatformParser {
   }
 
   /**
+   * Extract the SNlM0e auth token from page scripts.
+   * Gemini stores it in a script tag, not in cookies.
+   */
+  private getAuthToken(): string | null {
+    // Try to find the token in page scripts
+    const scripts = document.querySelectorAll('script')
+    for (const script of scripts) {
+      const text = script.textContent || ''
+      // Look for SNlM0e pattern
+      const match = text.match(/"SNlM0e"\s*:\s*"([^"]+)"/)
+      if (match) {
+        return match[1]
+      }
+    }
+    // Fallback: try to find a hidden input with the token
+    const input = document.querySelector('input[name="SNlM0e"]') as HTMLInputElement
+    if (input) {
+      return input.value
+    }
+    // Fallback: try meta tag
+    const meta = document.querySelector('meta[name="SNlM0e"]')
+    if (meta) {
+      return meta.getAttribute('content')
+    }
+    return null
+  }
+
+  /**
    * Fetch ALL conversations via Gemini's batchexecute API.
-   * This gets the conversation history from the server rather than just the visible sidebar.
+   * Uses the correct RPC ID 'MaZiqc' and proper request format.
    */
   async fetchAllConversations(): Promise<ConversationListItem[]> {
     const conversations: ConversationListItem[] = []
     
     try {
-      // Get the SNlM0e auth token from the page
-      const authMatch = document.cookie.match(/SNlM0e=([^;]+)/)
-      if (!authMatch) {
+      // Get the SNlM0e auth token
+      const authToken = this.getAuthToken()
+      if (!authToken) {
         console.error('[Gemini Parser] Could not find auth token')
         return this.getConversationList() // Fall back to DOM
       }
-      const authToken = authMatch[1]
 
-      // Use the batchexecute API to fetch conversation list
-      // This is the same API Gemini uses internally
-      let nextPageToken: string | undefined
+      let nextPageToken: string = ''
       let hasMore = true
+      let retries = 0
+      const maxRetries = 2
 
       while (hasMore) {
         try {
-          // Build the request body for batchexecute
-          const batchBody = `f.req=${encodeURIComponent(JSON.stringify([
-            [null, null, null, null, null, [nextPageToken || ''], null, null, null, null]
-          ]))}`
+          // Use the correct RPC ID 'MaZiqc' and request format
+          // Format: [["MaZiqc", JSON.stringify([20, pageToken, [0,null,1]]), null, "generic"]]
+          const requestPayload = JSON.stringify([
+            ['MaZiqc', JSON.stringify([20, nextPageToken || '', [0, null, 1]]), null, 'generic']
+          ])
 
           const response = await fetch(
-            'https://gemini.google.com/_/BardChatUi/data/batchexecute',
+            `https://gemini.google.com/_/BardChatUi/data/batchexecute?rpcids=MaZiqc&source-path=/&hl=en`,
             {
               method: 'POST',
               credentials: 'include',
               headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
               },
-              body: `f.req=${encodeURIComponent(JSON.stringify([
-                ['ChatHistoryListUi', null, [nextPageToken || ''], null, 'generic']
-              ]))}`
+              body: `f.req=${encodeURIComponent(requestPayload)}&at=${encodeURIComponent(authToken)}&`
             }
           )
+
+          if (response.status === 401 || response.status === 403) {
+            if (retries < maxRetries) {
+              retries++
+              await new Promise(r => setTimeout(r, 1000))
+              continue
+            }
+            console.error('[Gemini Parser] Authentication expired')
+            break
+          }
 
           if (!response.ok) {
             console.error(`[Gemini Parser] API error: ${response.status}`)
@@ -121,32 +172,37 @@ class GeminiParser implements PlatformParser {
 
           const text = await response.text()
           
-          // Parse the response (it's in a special format)
-          // Each line starts with a number followed by the JSON data
+          // Parse the response — each payload line starts with a number, then JSON
           const lines = text.split('\n')
           let parsed = false
 
           for (const line of lines) {
-            if (line.startsWith('[')) {
-              try {
-                const data = JSON.parse(line)
-                if (Array.isArray(data) && data.length > 0) {
-                  // Look for conversation items in the response
-                  const items = this.parseBatchResponse(data)
-                  if (items.length > 0) {
-                    conversations.push(...items)
-                    parsed = true
-                  }
-                  // Check for next page token
-                  if (data[0] && Array.isArray(data[0]) && data[0][1]) {
-                    nextPageToken = data[0][1]
-                  } else {
-                    hasMore = false
-                  }
+            const trimmed = line.trim()
+            // Lines containing conversation data start with a number then ]
+            if (trimmed.startsWith(']') || trimmed.startsWith('[')) {
+              continue
+            }
+            // Try to parse lines that look like JSON arrays
+            const jsonStart = trimmed.indexOf('[')
+            if (jsonStart === -1) continue
+            const jsonPart = trimmed.substring(jsonStart)
+            try {
+              const data = JSON.parse(jsonPart)
+              if (Array.isArray(data) && data.length > 0) {
+                const items = this.parseBatchResponse(data)
+                if (items.length > 0) {
+                  conversations.push(...items)
+                  parsed = true
                 }
-              } catch {
-                // Skip non-JSON lines
+                // Check for next page token in the response
+                if (data[0] && Array.isArray(data[0]) && data[0][1]) {
+                  nextPageToken = data[0][1]
+                } else {
+                  hasMore = false
+                }
               }
+            } catch {
+              // Skip non-JSON lines
             }
           }
 
@@ -215,44 +271,194 @@ class GeminiParser implements PlatformParser {
   }
 
   /**
-   * Extract all messages from the conversation
+   * Fetch full conversation detail from the Gemini API.
+   * Uses batchexecute to get the full conversation content.
+   */
+  async fetchConversationDetail(id: string): Promise<Conversation | null> {
+    try {
+      const authToken = this.getAuthToken()
+      if (!authToken) {
+        console.error('[Gemini Parser] Could not find auth token for detail fetch')
+        return null
+      }
+
+      // Use batchexecute to fetch conversation detail
+      // RPC ID for conversation detail is typically 'McFRL' or similar
+      // Format: [["McFRL", JSON.stringify([null, id, null, null, null]), null, "generic"]]
+      const requestPayload = JSON.stringify([
+        ['McFRL', JSON.stringify([null, id, null, null, null]), null, 'generic']
+      ])
+
+      const response = await fetch(
+        `https://gemini.google.com/_/BardChatUi/data/batchexecute?rpcids=McFRL&source-path=/app/${id}&hl=en`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: `f.req=${encodeURIComponent(requestPayload)}&at=${encodeURIComponent(authToken)}&`
+        }
+      )
+
+      if (!response.ok) {
+        console.error(`[Gemini Parser] Failed to fetch conversation ${id}: ${response.status}`)
+        return null
+      }
+
+      const text = await response.text()
+      
+      // Parse the response to extract messages
+      const messages: ChatMessage[] = []
+      const lines = text.split('\n')
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        const jsonStart = trimmed.indexOf('[')
+        if (jsonStart === -1) continue
+        const jsonPart = trimmed.substring(jsonStart)
+        try {
+          const data = JSON.parse(jsonPart)
+          // Extract messages from the response structure
+          this.extractMessagesFromApiResponse(data, messages)
+        } catch {
+          // Skip non-JSON lines
+        }
+      }
+
+      // Try to extract title from the response
+      let title = 'Untitled Conversation'
+      const pageTitle = document.title
+      if (pageTitle) {
+        const cleaned = pageTitle.replace(/\s*[-–|]\s*Gemini.*$/i, '').trim()
+        if (cleaned && cleaned !== 'Gemini') {
+          title = cleaned
+        }
+      }
+
+      return {
+        id,
+        title,
+        url: `https://gemini.google.com/app/${id}`,
+        messages,
+        createdAt: Date.now(), // Approximate
+        platform: 'gemini'
+      }
+    } catch (error) {
+      console.error(`[Gemini Parser] Error fetching conversation detail:`, error)
+      return null
+    }
+  }
+
+  /**
+   * Extract messages from a Gemini batchexecute API response
+   */
+  private extractMessagesFromApiResponse(data: any, messages: ChatMessage[]): void {
+    if (!data || typeof data !== 'object') return
+
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (typeof item === 'string') {
+          // Check if this looks like a message content string
+          const trimmed = item.trim()
+          if (trimmed.length > 5 && !trimmed.startsWith('[') && !trimmed.startsWith('{')) {
+            // Could be user or model content depending on position
+            // We'll make a best guess based on content
+            messages.push({
+              id: generateId(),
+              role: messages.length % 2 === 0 ? 'user' : 'assistant',
+              content: trimmed
+            })
+          }
+        } else {
+          this.extractMessagesFromApiResponse(item, messages)
+        }
+      }
+    } else if (typeof data === 'object') {
+      for (const key of Object.keys(data)) {
+        this.extractMessagesFromApiResponse(data[key], messages)
+      }
+    }
+  }
+  
+  /**
+   * Extract all messages from the conversation DOM
+   * Uses a single pass with deduplication to avoid counting messages twice
    */
   private extractMessages(): ChatMessage[] {
     const messages: ChatMessage[] = []
+    const seenElements = new Set<Element>()
     
-    const querySelectors = [
+    // First, try to find turn containers (single reliable selector approach)
+    // Gemini uses turn-based containers. Try common patterns.
+    const turnSelectors = [
+      '.conversation-turn',
+      '[class*="turn"]',
+      '[class*="message-container"]',
       '.user-query',
-      '[class*="user-message"]',
-      '[data-message-author-role="user"]',
-      '[class*="query"]'
+      '.model-response'
     ]
-    
-    const responseSelectors = [
-      '.model-response',
-      '[class*="model-message"]',
-      '[data-message-author-role="model"]',
-      '[class*="response"]'
-    ]
-    
-    querySelectors.forEach(selector => {
-      document.querySelectorAll(selector).forEach(element => {
-        const message = this.parseMessageElement(element, 'user')
-        if (message) {
-          messages.push(message)
-        }
-      })
+
+    // Collect all message elements with their roles using a unified approach
+    const userElements: Element[] = []
+    const assistantElements: Element[] = []
+
+    // Primary approach: find user and model messages with specific selectors
+    document.querySelectorAll('.user-query, [class*="user-message"], [data-message-author-role="user"]').forEach(el => {
+      if (!seenElements.has(el)) {
+        seenElements.add(el)
+        userElements.push(el)
+      }
     })
-    
-    responseSelectors.forEach(selector => {
-      document.querySelectorAll(selector).forEach(element => {
-        const message = this.parseMessageElement(element, 'assistant')
-        if (message) {
-          messages.push(message)
-        }
-      })
+
+    document.querySelectorAll('.model-response, [class*="model-message"], [data-message-author-role="model"]').forEach(el => {
+      if (!seenElements.has(el)) {
+        seenElements.add(el)
+        assistantElements.push(el)
+      }
     })
+
+    // Process user messages
+    for (const element of userElements) {
+      const message = this.parseMessageElement(element, 'user')
+      if (message) {
+        messages.push(message)
+      }
+    }
+
+    // Process assistant messages
+    for (const element of assistantElements) {
+      const message = this.parseMessageElement(element, 'assistant')
+      if (message) {
+        messages.push(message)
+      }
+    }
+
+    // If no messages found with specific selectors, try broader approach
+    if (messages.length === 0) {
+      const allMessageSelectors = [
+        '[class*="query"]',
+        '[class*="response"]',
+        '[class*="content"]'
+      ]
+      
+      for (const selector of allMessageSelectors) {
+        document.querySelectorAll(selector).forEach(element => {
+          if (seenElements.has(element)) return
+          seenElements.add(element)
+          
+          const isUser = /query|user/i.test(element.className) || 
+                         element.getAttribute('data-message-author-role') === 'user'
+          const role: ChatMessage['role'] = isUser ? 'user' : 'assistant'
+          const message = this.parseMessageElement(element, role)
+          if (message) {
+            messages.push(message)
+          }
+        })
+      }
+    }
     
-    // Sort by position in DOM
+    // Sort by DOM position
     messages.sort((a, b) => {
       const posA = this.getElementPosition(a.id)
       const posB = this.getElementPosition(b.id)
@@ -484,6 +690,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       } catch (e) {
         sendResponse({ error: (error as Error).message })
       }
+    })
+    return true
+  }
+
+  if (message.type === 'FETCH_CONVERSATION_DETAIL') {
+    parser.fetchConversationDetail(message.data?.id).then(conversation => {
+      sendResponse({ data: conversation })
+    }).catch(error => {
+      sendResponse({ error: error.message })
     })
     return true
   }
