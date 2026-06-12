@@ -151,7 +151,7 @@ npm install
 # Development mode (watch + hot reload)
 npx plasmo dev
 
-# Run tests (422 tests)
+# Run tests (438 tests)
 npm test
 
 # Production build

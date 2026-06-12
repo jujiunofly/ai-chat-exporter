@@ -109,7 +109,7 @@ async function handleExportRequest(
     
     const conversationId = data.conversation.id
     await chrome.storage.local.set({
-      [`export-${conversationId}`]: data.conversation
+      [`export-${conversationId}`]: { ...data.conversation, timestamp: Date.now() }
     })
     
     return { data: conversationId }

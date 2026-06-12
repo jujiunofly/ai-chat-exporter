@@ -130,8 +130,134 @@ function generateMessageHtml(message: ChatMessage, options: ExportOptions): stri
 }
 
 /**
- * Format content with HTML, preserving LaTeX notation
- * @param content - Plain text content
+ * Convert a single line of markdown inline formatting to HTML.
+ * Handles bold, italic, inline code, links, and inline LaTeX.
+ */
+function inlineMarkdownToHtml(line: string): string {
+  // Inline code `code`
+  let result = line.replace(/`([^`]+)`/g, '<code>$1</code>')
+  // Bold **text** or __text__
+  result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  result = result.replace(/__(.+?)__/g, '<strong>$1</strong>')
+  // Italic *text* or _text_ (but not inside ** or __)
+  result = result.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
+  result = result.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, '<em>$1</em>')
+  // Links [text](url) — block javascript:/data: URIs for safety
+  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, url) => {
+    const safeUrl = url.trim()
+    if (/^(javascript|data|vbscript):/i.test(safeUrl)) {
+      return text
+    }
+    return `<a href="${safeUrl}">${text}</a>`
+  })
+  return result
+}
+
+/**
+ * Convert markdown text segment to HTML, handling headings, lists, blockquotes, HRs, paragraphs.
+ */
+function markdownTextToHtml(text: string): string {
+  const lines = text.split('\n')
+  let html = ''
+  let inList = false
+  let listType: 'ul' | 'ol' | null = null
+  let inBlockquote = false
+  let blockquoteLines: string[] = []
+
+  function closeBlockquote() {
+    if (inBlockquote && blockquoteLines.length > 0) {
+      html += `<blockquote>${blockquoteLines.map(l => `<p>${inlineMarkdownToHtml(escapeHtml(l))}</p>`).join('\n')}</blockquote>\n`
+      blockquoteLines = []
+      inBlockquote = false
+    }
+  }
+
+  function closeList() {
+    if (inList) {
+      html += listType === 'ol' ? '</ol>\n' : '</ul>\n'
+      inList = false
+      listType = null
+    }
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+
+    // Empty line = paragraph break
+    if (!trimmed) {
+      closeBlockquote()
+      closeList()
+      continue
+    }
+
+    // Horizontal rule: ---, ***, ___
+    if (/^[-*_]{3,}$/.test(trimmed)) {
+      closeBlockquote()
+      closeList()
+      html += '<hr>\n'
+      continue
+    }
+
+    // Headings: # ## ### etc.
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/)
+    if (headingMatch) {
+      closeBlockquote()
+      closeList()
+      const level = headingMatch[1].length
+      html += `<h${level}>${inlineMarkdownToHtml(escapeHtml(headingMatch[2]))}</h${level}>\n`
+      continue
+    }
+
+    // Blockquote: > text
+    if (trimmed.startsWith('> ')) {
+      closeList()
+      if (!inBlockquote) inBlockquote = true
+      blockquoteLines.push(trimmed.slice(2))
+      continue
+    }
+
+    // Unordered list: - item, * item, + item
+    const ulMatch = trimmed.match(/^[-*+]\s+(.+)$/)
+    if (ulMatch) {
+      closeBlockquote()
+      if (!inList || listType !== 'ul') {
+        closeList()
+        html += '<ul>\n'
+        inList = true
+        listType = 'ul'
+      }
+      html += `<li>${inlineMarkdownToHtml(escapeHtml(ulMatch[1]))}</li>\n`
+      continue
+    }
+
+    // Ordered list: 1. item
+    const olMatch = trimmed.match(/^\d+\.\s+(.+)$/)
+    if (olMatch) {
+      closeBlockquote()
+      if (!inList || listType !== 'ol') {
+        closeList()
+        html += '<ol>\n'
+        inList = true
+        listType = 'ol'
+      }
+      html += `<li>${inlineMarkdownToHtml(escapeHtml(olMatch[1]))}</li>\n`
+      continue
+    }
+
+    // Regular text — close list/blockquote if open, then paragraph
+    closeBlockquote()
+    closeList()
+    html += `<p>${inlineMarkdownToHtml(escapeHtml(trimmed))}</p>\n`
+  }
+
+  closeBlockquote()
+  closeList()
+  return html
+}
+
+/**
+ * Format content with HTML, preserving LaTeX notation and converting markdown
+ * @param content - Markdown content
  * @returns HTML formatted content
  */
 function formatHtmlContent(content: string): string {
@@ -151,14 +277,8 @@ function formatHtmlContent(content: string): string {
       // Preserve LaTeX notation as-is (do NOT escape)
       html += `<p class="latex">${segment.content}</p>\n`
     } else {
-      // Regular text: escape HTML, convert newlines to <br> in paragraphs
-      const escaped = escapeHtml(segment.content)
-      const paragraphs = escaped.split('\n\n')
-      for (const para of paragraphs) {
-        if (para.trim()) {
-          html += `<p>${para.replace(/\n/g, '<br>')}</p>\n`
-        }
-      }
+      // Regular text: convert markdown to HTML
+      html += markdownTextToHtml(segment.content)
     }
   }
   

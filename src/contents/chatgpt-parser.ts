@@ -98,11 +98,11 @@ class ChatGPTParser implements PlatformParser {
 
   /**
    * Get a ChatGPT access token by calling the session endpoint.
-   * Caches the token in chrome.storage.sync so subsequent calls reuse it.
+   * Caches the token in chrome.storage.local so subsequent calls reuse it.
    */
   private async getAccessToken(): Promise<string> {
     // Try cached token first
-    const cached = await chrome.storage.sync.get(['chatGPTAccessToken'])
+    const cached = await chrome.storage.local.get(['chatGPTAccessToken'])
     if (cached.chatGPTAccessToken) return cached.chatGPTAccessToken
 
     // Fetch new token from session endpoint
@@ -112,7 +112,7 @@ class ChatGPTParser implements PlatformParser {
     if (!data.accessToken) throw new Error('No access token in response')
 
     // Cache it
-    await chrome.storage.sync.set({ chatGPTAccessToken: data.accessToken })
+    await chrome.storage.local.set({ chatGPTAccessToken: data.accessToken })
     return data.accessToken
   }
 
@@ -120,7 +120,7 @@ class ChatGPTParser implements PlatformParser {
    * Clear cached access token (call on 401)
    */
   private async resetAccessToken(): Promise<void> {
-    await chrome.storage.sync.remove('chatGPTAccessToken')
+    await chrome.storage.local.remove('chatGPTAccessToken')
   }
 
   /**

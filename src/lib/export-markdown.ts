@@ -98,13 +98,20 @@ function formatMessage(
     lines.push(...formatContent(message.content))
   }
   
-  // Add code blocks if enabled
+  // Add code blocks if enabled (avoid duplicates with content)
   if (options.includeCodeBlocks && message.codeBlocks?.length) {
-    lines.push('')
-    message.codeBlocks.forEach(block => {
-      lines.push(...formatCodeBlock(block))
-      lines.push('')
+    const contentLower = message.content?.toLowerCase() || ''
+    const newBlocks = message.codeBlocks.filter(block => {
+      const blockCode = block.code.trim().toLowerCase()
+      return blockCode.length > 10 && !contentLower.includes(blockCode.slice(0, 50))
     })
+    if (newBlocks.length > 0) {
+      lines.push('')
+      newBlocks.forEach(block => {
+        lines.push(...formatCodeBlock(block))
+        lines.push('')
+      })
+    }
   }
   
   // Add images if enabled
