@@ -4,8 +4,11 @@
 
 **Export your ChatGPT, Gemini, Claude, DeepSeek & Grok conversations to beautifully formatted files.**
 
-[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue?logo=googlechrome&logoColor=white)](https://github.com/pinguarmy/ai-chat-exporter)
+[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue?logo=googlechrome&logoColor=white)](https://chrome.google.com/webstore/detail/ai-chat-exporter)
+[![Firefox Add-on](https://img.shields.io/badge/Firefox-Add--on-orange?logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/en-US/firefox/addon/ai-chat-exporter/)
+[![Edge Extension](https://img.shields.io/badge/Edge-Extension-blue?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/ai-chat-exporter)
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/Tests-438%20passing-brightgreen)](https://github.com/pinguarmy/ai-chat-exporter/actions)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Plasmo](https://img.shields.io/badge/Built_with-Plasmo-purple.svg)](https://plasmo.com)
 
@@ -23,7 +26,7 @@ One-click export. Bulk download. Custom filenames. Beautiful output.
 
 ChatGPT, Gemini, Claude, DeepSeek, and Grok don't let you export your conversations in a clean, portable format. Your conversations are trapped inside their platforms. **AI Chat Exporter** fixes that.
 
-Export any conversation to **PDF** or **Markdown** with proper formatting, code blocks, images, and metadata. Perfect for:
+Export any conversation to **PDF** or **Markdown** with proper formatting, code blocks, LaTeX equations, images, and metadata. Perfect for:
 
 - **Archiving** important conversations before they get deleted
 - **Sharing** AI-generated content with colleagues or classmates
@@ -36,17 +39,27 @@ Export any conversation to **PDF** or **Markdown** with proper formatting, code 
 | Feature | Description |
 |---------|-------------|
 | **Multi-Platform** | Works on ChatGPT, Gemini, Claude, DeepSeek, and Grok |
-| **PDF Export** | Clean, print-ready PDF with proper page breaks and typography |
-| **Markdown Export** | Structured `.md` files with code blocks, headers, and formatting |
+| **PDF Export** | Clean, print-ready PDF with headings, lists, code blocks, LaTeX, and proper page breaks |
+| **Markdown Export** | Structured `.md` files with code blocks, headers, LaTeX equations, and formatting |
 | **Bulk Export** | Fetch ALL your conversations via API and export multiple at once |
-| **Custom Filenames** | Template system with `{date}`, `{title}`, `{platform}`, `{conv_date}` |
+| **Custom Filenames** | Template system with `{date}`, `{title}`, `{platform}`, `{conv_date}`, `{msgcount}` |
 | **Auto-Download** | No save dialogs — files go straight to your configured folder |
 | **Organized Folders** | Auto-sort exports into `ChatGPT/`, `Gemini/`, `Claude/`, `DeepSeek/`, or `Grok/` subfolders |
-| **Dark Mode** | Full light/dark theme support via CSS custom properties |
+| **LaTeX Support** | Mathematical equations preserved as-is in Markdown, rendered in PDF |
+| **Unicode Filenames** | Chinese, Japanese, Korean, Arabic titles preserved in filenames |
 | **Zero Tracking** | No analytics, no accounts, no data leaves your browser |
 | **Open Source** | MIT licensed — inspect, fork, and contribute |
 
 ## Installation
+
+### Chrome Web Store
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ai-chat-exporter?label=Install&style=for-the-badge)](https://chrome.google.com/webstore/detail/ai-chat-exporter)
+
+### Firefox Add-ons
+[![Firefox Add-on](https://img.shields.io/amo/v/ai-chat-exporter?label=Install&style=for-the-badge)](https://addons.mozilla.org/en-US/firefox/addon/ai-chat-exporter/)
+
+### Edge Add-ons
+[![Edge Add-on](https://img.shields.io/badge/Edge-Install-blue?style=for-the-badge)](https://microsoftedge.microsoft.com/addons/detail/ai-chat-exporter)
 
 ### From Source (2 minutes)
 
@@ -58,8 +71,8 @@ cd ai-chat-exporter
 # Install
 npm install
 
-# Build
-npx plasmo build
+# Build (creates both Chrome/Edge and Firefox ZIPs)
+npm run build
 
 # Load in Chrome:
 # 1. Open chrome://extensions/
@@ -67,10 +80,6 @@ npx plasmo build
 # 3. Click "Load unpacked"
 # 4. Select the build/chrome-mv3-prod/ folder
 ```
-
-### Chrome Web Store
-
-*Coming soon — star the repo to get notified!*
 
 ## Usage
 
@@ -112,8 +121,8 @@ Default pattern: `{conv_date}-{title}` → `2026-06-08-how-to-learn-python.pdf`
 Choose where files are saved in Settings:
 
 - **Default** → `Downloads/` root
-| **By Platform** | `Downloads/ChatGPT/`, `Downloads/Gemini/`, `Downloads/Claude/`, `Downloads/DeepSeek/`, or `Downloads/Grok/` |
-- **Custom** → Any folder name you choose
+- **By Platform** → `Downloads/ChatGPT/`, `Downloads/Gemini/`, `Downloads/Claude/`, `Downloads/DeepSeek/`, or `Downloads/Grok/`
+- **Custom** → Any folder name you choose (Unicode supported)
 
 ## How It Works
 
@@ -137,8 +146,8 @@ Choose where files are saved in Settings:
 ```
 
 - **Content scripts** parse conversations from the page DOM
-- **Hook script** intercepts API calls to capture auth credentials
-- **API fetcher** retrieves full conversation list with pagination
+- **API detail fetcher** retrieves full conversation via platform API (preferred over DOM for better formatting)
+- **Parser fallback** compares DOM vs API results and picks the more complete one
 - **Export engine** converts to PDF (html2canvas + jsPDF) or Markdown
 - **Auto-download** saves to configured folder without prompts
 
@@ -154,8 +163,8 @@ npx plasmo dev
 # Run tests (438 tests)
 npm test
 
-# Production build
-npx plasmo build
+# Production build (creates Chrome/Edge + Firefox ZIPs)
+npm run build
 ```
 
 ### Project Structure
@@ -174,14 +183,22 @@ ai-chat-exporter/
 │   │   └── grok-parser.ts     # Grok DOM parser
 │   ├── lib/
 │   │   ├── types.ts           # TypeScript interfaces
-│   │   ├── export-markdown.ts # Markdown generator
-│   │   ├── export-pdf.ts      # PDF generator
-│   │   ├── filename.ts        # Filename templates
+│   │   ├── export-markdown.ts # Markdown generator (LaTeX support)
+│   │   ├── export-pdf.ts      # PDF generator (markdown-to-HTML)
+│   │   ├── filename.ts        # Filename templates (Unicode-safe)
+│   │   ├── download-path.ts   # Download folder logic
+│   │   ├── parser-fallback.ts # DOM vs API comparison
 │   │   └── dom-utils.ts       # DOM helpers
 │   ├── components/            # React UI components
 │   ├── styles/                # CSS (Gemini design system)
 │   └── tabs/                  # Preview page
-├── tests/                     # 231 tests (Vitest + jsdom)
+├── tests/                     # 438 tests (Vitest + jsdom)
+├── scripts/
+│   ├── build-all.sh           # Build for Chrome/Edge + Firefox
+│   └── patch-firefox-manifest.js  # Firefox MV3 compatibility
+├── promo/                     # Store promotional images
+├── PRIVACY.md                 # Privacy policy
+├── CHROME_STORE_CHECKLIST.md  # Submission checklist
 ├── GUIDE.md                   # Full development guide
 └── package.json
 ```
@@ -189,9 +206,18 @@ ai-chat-exporter/
 ### Testing
 
 ```bash
-npm test                # Run all 231 tests
+npm test                # Run all 438 tests
 npx vitest run          # Same
 npx vitest watch        # Watch mode
+```
+
+### Build Outputs
+
+```bash
+npm run build
+# Creates:
+#   ai-chat-exporter.zip          → Chrome Web Store + Edge Add-ons
+#   ai-chat-exporter-firefox.zip  → Firefox Add-ons
 ```
 
 ## Contributing
@@ -206,11 +232,11 @@ Contributions welcome! Here's how:
 
 ### Good First Issues
 
-- Add Firefox support (Manifest V2 compatibility)
 - Add conversation search/filter in bulk mode
 - Add HTML export format
 - Add Notion/Obsidian integration
 - Improve PDF styling with syntax highlighting
+- Add conversation date range filter
 
 ## Privacy
 
@@ -221,6 +247,8 @@ This extension:
 - ✅ Uses NO analytics or tracking
 - ✅ Stores settings locally in chrome.storage
 - ✅ Source code is fully auditable
+
+Privacy policy: https://pinguarmy.github.io/ai-chat-exporter/PRIVACY.md
 
 ## License
 
