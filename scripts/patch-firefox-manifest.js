@@ -24,5 +24,12 @@ if (manifest.background && manifest.background.service_worker) {
   manifest.background.scripts = [manifest.background.service_worker]
 }
 
+// Add Firefox data_collection_permissions (required for MV3)
+manifest.data_collection_permissions = {
+  is_exfiltrated: false,
+  is_deceptive: false,
+  is_remote: false
+}
+
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2))
 console.log('Firefox compatibility patches applied to manifest.json')
