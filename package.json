@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "plasmo dev",
-    "build": "plasmo build && node scripts/patch-firefox-manifest.js",
+    "build": "bash scripts/build-all.sh",
     "package": "plasmo package",
     "test": "vitest run",
     "test:watch": "vitest",
