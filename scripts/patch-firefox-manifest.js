@@ -17,10 +17,7 @@ manifest.browser_specific_settings = {
     id: "ai-chat-exporter@pinguarmy.github.io",
     strict_min_version: "140.0",
     data_collection_permissions: {
-      required: false,
-      is_exfiltrated: false,
-      is_deceptive: false,
-      is_remote: false
+      required: ["none"]
     }
   }
 }
