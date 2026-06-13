@@ -38,3 +38,4 @@ pnpm-debug.log*
 # Plasmo
 .plasmo/
 build/
+ai-chat-exporter.zip
