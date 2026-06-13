@@ -11,24 +11,22 @@ const path = require('path')
 const manifestPath = path.join(__dirname, '..', 'build/chrome-mv3-prod/manifest.json')
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
 
-// Add Firefox gecko ID
+// Add Firefox gecko ID and data collection permissions
 manifest.browser_specific_settings = {
   gecko: {
     id: "ai-chat-exporter@pinguarmy.github.io",
-    strict_min_version: "109.0"
+    strict_min_version: "109.0",
+    data_collection_permissions: {
+      is_exfiltrated: false,
+      is_deceptive: false,
+      is_remote: false
+    }
   }
 }
 
 // Add background.scripts fallback for Firefox
 if (manifest.background && manifest.background.service_worker) {
   manifest.background.scripts = [manifest.background.service_worker]
-}
-
-// Add Firefox data_collection_permissions (required for MV3)
-manifest.data_collection_permissions = {
-  is_exfiltrated: false,
-  is_deceptive: false,
-  is_remote: false
 }
 
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2))
