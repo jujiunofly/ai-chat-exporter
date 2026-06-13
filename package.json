@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "plasmo dev",
-    "build": "plasmo build",
+    "build": "plasmo build && node scripts/patch-firefox-manifest.js",
     "package": "plasmo package",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -46,6 +46,12 @@
       "https://gemini.google.com/*",
       "https://grok.com/*",
       "https://www.grok.com/*"
-    ]
+    ],
+    "browser_specific_settings": {
+      "gecko": {
+        "id": "ai-chat-exporter@pinguarmy.github.io",
+        "strict_min_version": "109.0"
+      }
+    }
   }
 }
