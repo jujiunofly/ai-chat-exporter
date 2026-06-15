@@ -203,6 +203,8 @@ export interface ExtensionSettings {
   exportArtifacts: boolean
   /** Whether to include uploaded file references */
   includeUploadedFiles: boolean
+  /** Scheduled export configuration */
+  scheduledExport?: ScheduledExportSettings
 }
 
 /**
@@ -220,10 +222,73 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   exportArtifacts: true,
   includeUploadedFiles: true
 }
+/** Supported platforms for scheduled export */
+export type ExportablePlatform = 'chatgpt' | 'claude' | 'gemini' | 'deepseek' | 'grok'
 
-/**
- * Message types for communication between components
- */
+/** Schedule frequency options */
+export type ScheduleFrequency = 'hourly' | 'every6h' | 'daily' | 'weekly'
+
+/** Scheduled export configuration for a single platform */
+export interface PlatformScheduleConfig {
+  /** Whether this platform's schedule is enabled */
+  enabled: boolean
+  /** How often to check for new conversations */
+  frequency: ScheduleFrequency
+  /** Max conversations to export per run (prevents runaway exports) */
+  maxPerRun: number
+  /** Export format override (falls back to defaultFormat) */
+  format?: ExportFormat
+}
+
+/** Complete scheduled export settings */
+export interface ScheduledExportSettings {
+  /** Whether scheduled export is globally enabled */
+  enabled: boolean
+  /** Per-platform schedule configurations */
+  platforms: Record<ExportablePlatform, PlatformScheduleConfig>
+  /** Export format for scheduled exports (default: markdown) */
+  defaultFormat: ExportFormat
+  /** Whether to close the tab after export completes */
+  closeTabAfterExport: boolean
+  /** Delay in ms between conversation exports (rate limiting) */
+  requestDelayMs: number
+  /** Max total conversations across all platforms per run */
+  maxTotalPerRun: number
+}
+
+/** Record of a single exported conversation (for dedup tracking) */
+export interface ExportedConversationRecord {
+  /** Conversation ID */
+  id: string
+  /** Platform it was exported from */
+  platform: ExportablePlatform
+  /** Title at time of export */
+  title: string
+  /** Unix timestamp of when it was exported */
+  exportedAt: number
+  /** Filename used for the export */
+  filename: string
+}
+
+/** Status of the last scheduled export run */
+export interface ScheduledExportStatus {
+  /** When the last run started */
+  lastRunAt?: number
+  /** When the last run finished */
+  lastRunFinishedAt?: number
+  /** Total conversations exported in last run */
+  lastRunExported: number
+  /** Total conversations that failed in last run */
+  lastRunFailed: number
+  /** Any error message from the last run */
+  lastRunError?: string
+  /** Currently running? */
+  isRunning: boolean
+  /** Which platform is currently being processed */
+  currentPlatform?: ExportablePlatform
+}
+
+/** Message types for communication between components */
 export type MessageType = 
   | 'PARSE_CONVERSATION'
   | 'CONVERSATION_PARSED'
@@ -240,6 +305,10 @@ export type MessageType =
   | 'FETCH_CONVERSATION_DETAIL'
   | 'BULK_EXPORT'
   | 'BULK_EXPORT_PROGRESS'
+  | 'SCHEDULED_EXPORT_RUN'
+  | 'SCHEDULED_EXPORT_STATUS'
+  | 'SCHEDULED_EXPORT_CONFIG'
+  | 'SCHEDULED_EXPORT_CLEAR_HISTORY'
 
 /**
  * Message payload interface

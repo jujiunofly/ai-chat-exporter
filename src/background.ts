@@ -1,28 +1,49 @@
 /**
  * Background Service Worker
  * Handles messages between popup and content scripts
+ * Also handles scheduled auto-export
  */
-import type { MessagePayload, Conversation, ExtensionSettings, BulkExportProgress } from './lib/types'
+import type {
+  MessagePayload,
+  Conversation,
+  ExtensionSettings,
+  BulkExportProgress,
+  ScheduledExportSettings,
+  ScheduledExportStatus,
+  ExportablePlatform,
+  ExportedConversationRecord,
+  ConversationListItem,
+  ExportOptions,
+} from './lib/types'
+import { DEFAULT_SETTINGS } from './lib/types'
+import { conversationToMarkdown } from './lib/export-markdown'
+import { generateFilename } from './lib/filename'
+import { buildDownloadFilename } from './lib/download-path'
+import {
+  getDefaultScheduledExportSettings,
+  isDueForRun,
+  delay,
+  PLATFORM_URLS,
+  ALL_PLATFORMS,
+} from './lib/scheduled-export'
 
 // Default settings
-const DEFAULT_SETTINGS: ExtensionSettings = {
-  defaultFormat: 'markdown',
-  includeMetadata: true,
-  includeCodeBlocks: true,
-  includeImages: true,
-  theme: 'light',
-  filenamePattern: '{date}-{title}',
-  downloadFolder: 'default',
-  customFolderName: 'AI Chat Exports',
-  exportArtifacts: true,
-  includeUploadedFiles: true
-}
+const _DEFAULT_SETTINGS: ExtensionSettings = DEFAULT_SETTINGS
 
 // Listen for extension installation
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     // Set default settings on first install
     chrome.storage.local.set({ settings: DEFAULT_SETTINGS })
+    // Create the scheduled export checker alarm (every 15 minutes)
+    chrome.alarms.create('scheduled-export-check', { periodInMinutes: 15 })
+  }
+})
+
+// Ensure alarm exists on startup (in case it was cleared)
+chrome.alarms.get('scheduled-export-check', (alarm) => {
+  if (!alarm) {
+    chrome.alarms.create('scheduled-export-check', { periodInMinutes: 15 })
   }
 })
 
@@ -62,7 +83,19 @@ async function handleMessage(
 
     case 'FETCH_ALL_CONVERSATIONS':
       return handleFetchAllConversations(sender)
+
+    case 'SCHEDULED_EXPORT_RUN':
+      return handleScheduledExportRun()
     
+    case 'SCHEDULED_EXPORT_STATUS':
+      return handleScheduledExportStatus()
+    
+    case 'SCHEDULED_EXPORT_CONFIG':
+      return handleScheduledExportConfig(message.data as Partial<ScheduledExportSettings> | undefined)
+    
+    case 'SCHEDULED_EXPORT_CLEAR_HISTORY':
+      return handleClearExportHistory()
+
     default:
       return { error: `Unknown message type: ${message.type}` }
   }
@@ -196,9 +229,104 @@ async function handleFetchAllConversations(
     return { error: 'Failed to fetch all conversations' }
   }
 }
-// Clean up old exports via chrome.alarms (MV3 compatible)
-chrome.alarms.create('cleanup-exports', { periodInMinutes: 60 })
+
+// ──────────────────────────────────────────────────────────────────
+// Scheduled Export: Configuration & Status Management
+// ──────────────────────────────────────────────────────────────────
+
+/**
+ * Get scheduled export settings with defaults
+ */
+async function getScheduledExportSettings(): Promise<ScheduledExportSettings> {
+  try {
+    const result = await chrome.storage.local.get('settings')
+    const settings = result.settings || DEFAULT_SETTINGS
+    return (settings as ExtensionSettings).scheduledExport || getDefaultScheduledExportSettings()
+  } catch {
+    return getDefaultScheduledExportSettings()
+  }
+}
+
+/**
+ * Handle manual scheduled export run request
+ */
+async function handleScheduledExportRun(): Promise<{ data?: boolean; error?: string }> {
+  try {
+    // Prevent running if already running
+    const statusResult = await chrome.storage.local.get('scheduledExportStatus')
+    const currentStatus = statusResult.scheduledExportStatus as ScheduledExportStatus | undefined
+    if (currentStatus?.isRunning) {
+      return { error: 'Scheduled export already running' }
+    }
+
+    // Run in background (don't await — it takes a long time)
+    checkAndRunScheduledExports()
+    return { data: true }
+  } catch (err) {
+    return { error: (err as Error).message }
+  }
+}
+
+/**
+ * Handle status query
+ */
+async function handleScheduledExportStatus(): Promise<{ data?: ScheduledExportStatus; error?: string }> {
+  try {
+    const result = await chrome.storage.local.get('scheduledExportStatus')
+    return { data: result.scheduledExportStatus || null }
+  } catch (err) {
+    return { error: (err as Error).message }
+  }
+}
+
+/**
+ * Handle config update
+ */
+async function handleScheduledExportConfig(
+  partial?: Partial<ScheduledExportSettings>
+): Promise<{ data?: ScheduledExportSettings; error?: string }> {
+  try {
+    const current = await getScheduledExportSettings()
+    const updated = { ...current, ...partial } as ScheduledExportSettings
+
+    // Also update the parent settings object
+    const settingsResult = await chrome.storage.local.get('settings')
+    const parentSettings = { ...DEFAULT_SETTINGS, ...(settingsResult.settings || {}) } as ExtensionSettings
+    parentSettings.scheduledExport = updated
+    await chrome.storage.local.set({ settings: parentSettings })
+
+    // Update alarms if enabled/disabled
+    if (updated.enabled) {
+      chrome.alarms.create('scheduled-export-check', { periodInMinutes: 15 })
+    }
+
+    return { data: updated }
+  } catch (err) {
+    return { error: (err as Error).message }
+  }
+}
+
+/**
+ * Handle clearing export history
+ */
+async function handleClearExportHistory(): Promise<{ data?: boolean; error?: string }> {
+  try {
+    await clearExportedHistory()
+    return { data: true }
+  } catch (err) {
+    return { error: (err as Error).message }
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Scheduled Export: Alarm Handler & Core Logic
+// ──────────────────────────────────────────────────────────────────
+
+// Handle alarms
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'scheduled-export-check') {
+    await checkAndRunScheduledExports()
+  }
   if (alarm.name !== 'cleanup-exports') return
   try {
     const items = await chrome.storage.local.get(null) as unknown as Record<string, unknown>
@@ -216,3 +344,279 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // Silently handle cleanup errors
   }
 })
+
+/**
+ * Main entry: check all platforms and run scheduled exports as needed
+ */
+async function checkAndRunScheduledExports(): Promise<void> {
+  const config = await getScheduledExportSettings()
+  if (!config.enabled) return
+
+  // Prevent concurrent runs
+  const statusResult = await chrome.storage.local.get('scheduledExportStatus')
+  const currentStatus = statusResult.scheduledExportStatus as ScheduledExportStatus | undefined
+  if (currentStatus?.isRunning) return
+
+  const now = Date.now()
+
+  for (const platform of ALL_PLATFORMS) {
+    const platformConfig = config.platforms[platform]
+    if (!platformConfig?.enabled) continue
+
+    const lastRunKey = `scheduledExport-lastRun-${platform}`
+    const result = await chrome.storage.local.get(lastRunKey)
+    const lastRun = (result[lastRunKey] as number) || 0
+
+    if (isDueForRun(platformConfig.frequency, lastRun, now)) {
+      await runScheduledExportForPlatform(platform, config)
+      await chrome.storage.local.set({ [lastRunKey]: now })
+    }
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Scheduled Export: Tab Management
+// ──────────────────────────────────────────────────────────────────
+
+/** Wait for a tab to finish loading */
+function waitForTabComplete(tabId: number, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener)
+      reject(new Error('Tab load timeout'))
+    }, timeoutMs)
+
+    function listener(updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        clearTimeout(timer)
+        chrome.tabs.onUpdated.removeListener(listener)
+        // Extra delay for SPA hydration
+        setTimeout(resolve, 3000)
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(listener)
+
+    // Check if already loaded
+    chrome.tabs.get(tabId).then(tab => {
+      if (tab.status === 'complete') {
+        clearTimeout(timer)
+        chrome.tabs.onUpdated.removeListener(listener)
+        setTimeout(resolve, 3000)
+      }
+    }).catch(() => {
+      // Tab might not exist yet — that's fine, the listener will catch it
+    })
+  })
+}
+
+/** Wait for content script to be injectable and responsive */
+async function waitForContentScript(
+  tabId: number,
+  platform: ExportablePlatform,
+  timeoutMs: number
+): Promise<void> {
+  const startTime = Date.now()
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, { type: 'DETECT_PLATFORM' })
+      if (response?.data?.platform === platform) return
+    } catch {
+      // Content script not ready yet
+    }
+    await delay(1000)
+  }
+  throw new Error(`Content script not ready on ${platform} after ${timeoutMs}ms`)
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Scheduled Export: Export Dedup Tracking
+// ──────────────────────────────────────────────────────────────────
+
+/** Get set of already-exported conversation IDs for a platform */
+async function getExportedIds(platform: ExportablePlatform): Promise<Set<string>> {
+  const key = `exportedIds-${platform}`
+  const result = await chrome.storage.local.get(key)
+  const ids: string[] = result[key] || []
+  return new Set(ids)
+}
+
+/** Mark a conversation as exported */
+async function markAsExported(record: ExportedConversationRecord): Promise<void> {
+  const key = `exportedIds-${record.platform}`
+  const statusKey = `exportedRecord-${record.platform}-${record.id}`
+
+  // Add ID to the exported IDs list
+  const result = await chrome.storage.local.get(key)
+  const ids: string[] = result[key] || []
+  if (!ids.includes(record.id)) {
+    ids.push(record.id)
+    // Keep only last 500 IDs per platform to prevent unbounded growth
+    if (ids.length > 500) ids.splice(0, ids.length - 500)
+    await chrome.storage.local.set({ [key]: ids })
+  }
+
+  // Store the full record for status/history display
+  await chrome.storage.local.set({ [statusKey]: record })
+}
+
+/** Clear all exported history for a platform (or all platforms) */
+async function clearExportedHistory(platform?: ExportablePlatform): Promise<void> {
+  const platforms = platform
+    ? [platform]
+    : ALL_PLATFORMS
+  for (const p of platforms) {
+    await chrome.storage.local.remove(`exportedIds-${p}`)
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Scheduled Export: Platform Export Runner
+// ──────────────────────────────────────────────────────────────────
+
+/**
+ * Run scheduled export for a single platform
+ */
+async function runScheduledExportForPlatform(
+  platform: ExportablePlatform,
+  config: ScheduledExportSettings
+): Promise<void> {
+  // Update status: starting
+  const status: ScheduledExportStatus = {
+    lastRunAt: Date.now(),
+    isRunning: true,
+    currentPlatform: platform,
+    lastRunExported: 0,
+    lastRunFailed: 0,
+  }
+  await chrome.storage.local.set({ scheduledExportStatus: status })
+
+  let tabId: number | null = null
+
+  try {
+    // 1. Open a tab to the platform
+    const tab = await chrome.tabs.create({
+      url: PLATFORM_URLS[platform],
+      active: false, // background tab
+    })
+    tabId = tab.id ?? null
+
+    if (!tabId) throw new Error('Failed to create tab')
+
+    // 2. Wait for the tab to finish loading
+    await waitForTabComplete(tabId, 30000) // 30s timeout
+
+    // 3. Wait for content script to be ready
+    await waitForContentScript(tabId, platform, 10000)
+
+    // 4. Fetch conversation list
+    const listResponse = await chrome.tabs.sendMessage(tabId, {
+      type: 'FETCH_ALL_CONVERSATIONS',
+    })
+
+    if (!listResponse?.data) {
+      throw new Error(`Failed to fetch conversations from ${platform}`)
+    }
+
+    const allConversations: ConversationListItem[] = listResponse.data
+
+    // 5. Filter out already-exported conversations
+    const exportedIds = await getExportedIds(platform)
+    const newConversations = allConversations.filter(c => !exportedIds.has(c.id))
+
+    // 6. Limit to max per run
+    const platformConfig = config.platforms[platform]
+    const toExport = newConversations.slice(0, platformConfig.maxPerRun)
+
+    // 7. Export each conversation
+    let exported = 0
+    let failed = 0
+
+    for (const convItem of toExport) {
+      try {
+        // Check total limit
+        if (exported + failed >= config.maxTotalPerRun) break
+
+        // Fetch full conversation detail
+        const detailResponse = await chrome.tabs.sendMessage(tabId, {
+          type: 'FETCH_CONVERSATION_DETAIL',
+          data: { id: convItem.id },
+        })
+
+        const conversation: Conversation | null = detailResponse?.data || null
+        if (!conversation || conversation.messages.length === 0) {
+          failed++
+          continue
+        }
+
+        // Rate limiting delay between requests
+        await delay(config.requestDelayMs)
+
+        // Export as markdown
+        const exportOptions: ExportOptions = {
+          format: 'markdown',
+          includeMetadata: true,
+          includeCodeBlocks: true,
+          includeImages: true,
+        }
+
+        const markdown = conversationToMarkdown(conversation, exportOptions)
+        const baseFilename = generateFilename(
+          '{date}-{platform}-{title}',
+          conversation
+        )
+        const filename = buildDownloadFilename(
+          baseFilename,
+          platform,
+          '.md',
+          'by-platform', // organized by platform folder
+          ''
+        )
+
+        // Download
+        const blob = new Blob([markdown], { type: 'text/markdown' })
+        const url = URL.createObjectURL(blob)
+
+        await chrome.downloads.download({ url, filename, saveAs: false })
+        setTimeout(() => URL.revokeObjectURL(url), 5000)
+
+        // Track exported conversation
+        await markAsExported({
+          id: convItem.id,
+          platform,
+          title: convItem.title,
+          exportedAt: Date.now(),
+          filename,
+        })
+
+        exported++
+      } catch (err) {
+        console.error(`[Scheduled Export] Failed to export ${convItem.id}:`, err)
+        failed++
+      }
+    }
+
+    // 8. Update status
+    status.lastRunFinishedAt = Date.now()
+    status.isRunning = false
+    status.lastRunExported = exported
+    status.lastRunFailed = failed
+    await chrome.storage.local.set({ scheduledExportStatus: status })
+
+  } catch (err) {
+    console.error(`[Scheduled Export] Platform ${platform} failed:`, err)
+    status.lastRunFinishedAt = Date.now()
+    status.isRunning = false
+    status.lastRunError = (err as Error).message
+    await chrome.storage.local.set({ scheduledExportStatus: status })
+  } finally {
+    // 9. Close the tab
+    if (tabId && config.closeTabAfterExport) {
+      try {
+        await chrome.tabs.remove(tabId)
+      } catch {
+        // Tab might already be closed
+      }
+    }
+  }
+}
