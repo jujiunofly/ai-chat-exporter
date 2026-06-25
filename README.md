@@ -59,7 +59,7 @@ Export any conversation to **PDF** or **Markdown** with proper formatting, code 
 [![Firefox Add-on](https://img.shields.io/amo/v/ai-chat-exporter?label=Install&style=for-the-badge)](https://addons.mozilla.org/en-US/firefox/addon/pinguarmy-ai-chat-exporter/)
 
 ### Edge Add-ons
-[![Edge Add-on](https://img.shields.io/badge/Edge-Install-blue?style=for-the-badge)](https://microsoftedge.microsoft.com/addons/detail/ai-chat-exporter)
+[![Edge Add-on](https://img.shields.io/badge/Edge-Install-blue?style=for-the-badge)](https://microsoftedge.microsoft.com/addons/detail/ai-chat-exporter/ndjcmigocoflghenpchbldpkaccechpg)
 
 ### From Source (2 minutes)
 
@@ -227,7 +227,7 @@ Contributions welcome! Here's how:
 1. **Fork** the repository
 2. **Create** a feature branch (`git checkout -b feature/awesome`)
 3. **Commit** your changes (`git commit -m 'Add awesome feature'`)
-4. **Push** to the branch (`git push origin feature/awesome`)
+4. **Push** to the branch
 5. **Open** a Pull Request
 
 ### Good First Issues
