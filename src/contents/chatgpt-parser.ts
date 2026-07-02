@@ -83,8 +83,12 @@ class ChatGPTParser implements PlatformParser {
         return null
       }
       
+      // Extract real conversation ID from URL (e.g., /c/abc-123-def)
+      const urlMatch = window.location.pathname.match(/\/c\/([a-f0-9-]+)/)
+      const conversationId = urlMatch?.[1] || generateId()
+
       return {
-        id: generateId(),
+        id: conversationId,
         title: this.getConversationTitle(),
         url: window.location.href,
         messages,

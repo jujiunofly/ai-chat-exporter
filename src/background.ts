@@ -144,6 +144,15 @@ async function handleExportRequest(
     await chrome.storage.local.set({
       [`export-${conversationId}`]: { ...data.conversation, timestamp: Date.now() }
     })
+
+    // Track this export so bulk export won't re-download it
+    await markAsExported({
+      id: conversationId,
+      platform: data.conversation.platform,
+      title: data.conversation.title,
+      exportedAt: Date.now(),
+      filename: '',
+    })
     
     return { data: conversationId }
   } catch (error) {

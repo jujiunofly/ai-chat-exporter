@@ -160,8 +160,12 @@ class GeminiParser implements PlatformParser {
         return null
       }
 
+      // Extract real conversation ID from URL (e.g., /app/abc123)
+      const urlMatch = window.location.pathname.match(/\/app\/([a-zA-Z0-9_-]+)/)
+      const conversationId = urlMatch?.[1] || generateId()
+
       return {
-        id: generateId(),
+        id: conversationId,
         title: this.getConversationTitle(),
         url: window.location.href,
         messages,

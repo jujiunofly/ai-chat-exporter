@@ -130,8 +130,12 @@ class ClaudeParser implements PlatformParser {
         return null
       }
 
+      // Extract real conversation ID from URL (e.g., /chat/abc-123-def)
+      const urlMatch = window.location.pathname.match(/\/chat\/([a-f0-9-]+)/)
+      const conversationId = urlMatch?.[1] || generateId()
+
       return {
-        id: generateId(),
+        id: conversationId,
         title: this.getConversationTitle(),
         url: window.location.href,
         messages,

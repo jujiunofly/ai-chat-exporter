@@ -1,7 +1,7 @@
 {
   "name": "ai-chat-exporter",
   "displayName": "AI Chat Exporter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Export conversations from ChatGPT, Gemini, Claude, DeepSeek, and Grok to PDF and Markdown files",
   "author": "AI Chat Exporter Contributors",
   "license": "MIT",
@@ -11,7 +11,8 @@
     "package": "plasmo package",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "html2canvas": "^1.4.1",
@@ -27,6 +28,7 @@
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
     "jsdom": "^24.0.0",
+    "patch-package": "^8.0.1",
     "typescript": "^5.3.3",
     "vitest": "^1.2.2"
   },
