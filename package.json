@@ -1,7 +1,7 @@
 {
   "name": "ai-chat-exporter",
   "displayName": "AI Chat Exporter",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Export conversations from ChatGPT, Gemini, Claude, DeepSeek, and Grok to PDF and Markdown files",
   "author": "AI Chat Exporter Contributors",
   "license": "MIT",
