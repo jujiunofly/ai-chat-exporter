@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build browser packages
+        run: npm run build
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            VERSION="$(node -p "require('./package.json').version")"
+            TAG="v${VERSION}"
+            if git rev-parse "${TAG}" >/dev/null 2>&1; then
+              echo "Tag ${TAG} already exists locally."
+            else
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git tag "${TAG}"
+              git push origin "${TAG}"
+            fi
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release notes
+        shell: bash
+        run: |
+          cat > RELEASE_NOTES.md <<'EOF'
+          ## AI Chat Exporter
+
+          Browser extension packages for Chrome/Edge and Firefox.
+
+          ### Files
+          - `ai-chat-exporter.zip` — Chrome Web Store / Microsoft Edge Add-ons package
+          - `ai-chat-exporter-firefox.zip` — Firefox Add-ons package
+
+          ### Validation
+          - Tests are run before release packaging.
+          - Packages are generated with `npm run build`.
+          EOF
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" ai-chat-exporter.zip ai-chat-exporter-firefox.zip --clobber
+          else
+            gh release create "${TAG}" ai-chat-exporter.zip ai-chat-exporter-firefox.zip \
+              --title "AI Chat Exporter ${TAG}" \
+              --notes-file RELEASE_NOTES.md
+          fi
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-chat-exporter-release-packages
+          path: |
+            ai-chat-exporter.zip
+            ai-chat-exporter-firefox.zip
+          if-no-files-found: error
