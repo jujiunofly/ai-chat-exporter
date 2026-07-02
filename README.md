@@ -4,7 +4,7 @@
 
 **Export your ChatGPT, Gemini, Claude, DeepSeek & Grok conversations to beautifully formatted files.**
 
-[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue?logo=googlechrome&logoColor=white)]([https://chrome.google.com/webstore/detail/ai-chat-exporter])(https://chromewebstore.google.com/detail/ai-chat-exporter/kdafdajkiljhghecdkeogldafhjgmgpk)
+[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/ai-chat-exporter/kdafdajkiljhghecdkeogldafhjgmgpk)
 [![Firefox Add-on](https://img.shields.io/badge/Firefox-Add--on-orange?logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/en-US/firefox/addon/pinguarmy-ai-chat-exporter/)
 [![Edge Extension](https://img.shields.io/badge/Edge-Extension-blue?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/ai-chat-exporter/ndjcmigocoflghenpchbldpkaccechpg)
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -53,7 +53,7 @@ Export any conversation to **PDF** or **Markdown** with proper formatting, code 
 ## Installation
 
 ### Chrome Web Store
-[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ai-chat-exporter?label=Install&style=for-the-badge)](https://chrome.google.com/webstore/detail/ai-chat-exporter)
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/kdafdajkiljhghecdkeogldafhjgmgpk?label=Install&style=for-the-badge)](https://chromewebstore.google.com/detail/ai-chat-exporter/kdafdajkiljhghecdkeogldafhjgmgpk)
 
 ### Firefox Add-ons
 [![Firefox Add-on](https://img.shields.io/amo/v/ai-chat-exporter?label=Install&style=for-the-badge)](https://addons.mozilla.org/en-US/firefox/addon/pinguarmy-ai-chat-exporter/)
