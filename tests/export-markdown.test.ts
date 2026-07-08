@@ -156,6 +156,69 @@ describe('Export Markdown', () => {
       expect(markdown).toContain('**Platform:** Google Gemini')
       expect(markdown).toContain('Exported from Google Gemini')
     })
+
+    it('emits a separate "## Artifacts" section when exportArtifacts is true', () => {
+      const conv = createConversation({
+        messages: [
+          { id: 'm1', role: 'user', content: 'Make a report' },
+          {
+            id: 'm2',
+            role: 'assistant',
+            content: 'Here is the report.',
+            attachments: [{ type: 'file', url: 'https://example.com/report.pdf', name: 'report.pdf' }]
+          }
+        ]
+      })
+      const markdown = conversationToMarkdown(conv, { ...defaultOptions, exportArtifacts: true })
+      expect(markdown).toContain('## Artifacts')
+      expect(markdown).toContain('[report.pdf](https://example.com/report.pdf)')
+    })
+
+    it('omits the "## Artifacts" section when exportArtifacts is false', () => {
+      const conv = createConversation({
+        messages: [
+          { id: 'm1', role: 'user', content: 'Make a report' },
+          {
+            id: 'm2',
+            role: 'assistant',
+            content: 'Here is the report.',
+            attachments: [{ type: 'file', url: 'https://example.com/report.pdf', name: 'report.pdf' }]
+          }
+        ]
+      })
+      const markdown = conversationToMarkdown(conv, { ...defaultOptions, exportArtifacts: false })
+      expect(markdown).not.toContain('## Artifacts')
+    })
+
+    it('keeps uploaded-file references when includeUploadedFiles is true', () => {
+      const conv = createConversation({
+        messages: [
+          {
+            id: 'm1',
+            role: 'user',
+            content: 'Here is my file',
+            attachments: [{ type: 'file', url: 'https://example.com/essay.docx', name: 'essay.docx', uploaded: true }]
+          }
+        ]
+      })
+      const markdown = conversationToMarkdown(conv, { ...defaultOptions, includeUploadedFiles: true })
+      expect(markdown).toContain('essay.docx')
+    })
+
+    it('strips uploaded-file references when includeUploadedFiles is false', () => {
+      const conv = createConversation({
+        messages: [
+          {
+            id: 'm1',
+            role: 'user',
+            content: 'Here is my file',
+            attachments: [{ type: 'file', url: 'https://example.com/essay.docx', name: 'essay.docx', uploaded: true }]
+          }
+        ]
+      })
+      const markdown = conversationToMarkdown(conv, { ...defaultOptions, includeUploadedFiles: false })
+      expect(markdown).not.toContain('essay.docx')
+    })
   })
 
   describe('generateMarkdownFilename', () => {

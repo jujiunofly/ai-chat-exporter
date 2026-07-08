@@ -94,7 +94,7 @@ function injectHookScript() {
 /**
  * Gemini parser implementation
  */
-class GeminiParser implements PlatformParser {
+export class GeminiParser implements PlatformParser {
   platform = 'gemini' as const
 
   /**
@@ -595,76 +595,60 @@ class GeminiParser implements PlatformParser {
     const messages: ChatMessage[] = []
     const seenElements = new Set<Element>()
 
-    // First, try to find turn containers (single reliable selector approach)
-    // Gemini uses turn-based containers. Try common patterns.
-    const turnSelectors = [
-      '.conversation-turn',
-      '[class*="turn"]',
-      '[class*="message-container"]',
-      '.user-query',
-      '.model-response'
-    ]
+    // Scope strictly to the main conversation container. The sidebar (nav/aside)
+    // holds duplicate copies of every message that MUST NOT be re-collected.
+    const root =
+      document.querySelector('main') ||
+      document.querySelector('[role="main"]') ||
+      document.querySelector('[class*="conversation"]') ||
+      document.body
+    if (!root) return messages
 
-    // Collect all message elements with their roles using a unified approach
-    const userElements: Element[] = []
-    const assistantElements: Element[] = []
+    // ONE query that returns BOTH user and assistant elements in document order.
+    // This is the key fix: a single querySelectorAll preserves the real
+    // interleaved user/assistant/user/assistant order. Splitting into separate
+    // user-then-assistant passes would wrongly emit "all users then all
+    // assistants".
+    const MESSAGE_SELECTOR =
+      '.user-query, [class*="user-message"], [data-message-author-role="user"], ' +
+      '.model-response, [class*="model-message"], [data-message-author-role="model"]'
 
-    // Primary approach: find user and model messages with specific selectors
-    document.querySelectorAll('.user-query, [class*="user-message"], [data-message-author-role="user"]').forEach(el => {
-      if (!seenElements.has(el)) {
-        seenElements.add(el)
-        userElements.push(el)
-      }
-    })
+    let nodes = Array.from(root.querySelectorAll(MESSAGE_SELECTOR)) as Element[]
 
-    document.querySelectorAll('.model-response, [class*="model-message"], [data-message-author-role="model"]').forEach(el => {
-      if (!seenElements.has(el)) {
-        seenElements.add(el)
-        assistantElements.push(el)
-      }
-    })
+    // Fallback: if the specific selectors found nothing, broaden to any
+    // query/response/content element (still in DOM order).
+    if (nodes.length === 0) {
+      nodes = Array.from(
+        root.querySelectorAll('[class*="query"], [class*="response"], [class*="content"]')
+      ) as Element[]
+    }
 
-    // Process user messages
-    for (const element of userElements) {
-      const message = this.parseMessageElement(element, 'user')
+    let prevText = ''
+    for (const element of nodes) {
+      if (seenElements.has(element)) continue
+      seenElements.add(element)
+
+      const roleAttr = element.getAttribute('data-message-author-role')
+      const role: ChatMessage['role'] =
+        roleAttr === 'user' ? 'user' :
+        roleAttr === 'model' ? 'assistant' :
+        /user/i.test(element.className) || element.matches('.user-query, [class*="user-message"]')
+          ? 'user' : 'assistant'
+
+      // Dedup: skip only if this node is text-identical to the PREVIOUS one we
+      // kept. This removes duplicate DOM copies (sidebar/artifact/“Gemini said”
+      // panels render the same text in adjacent nodes) WITHOUT dropping a
+      // genuine repeated message that appears later in the conversation.
+      const text = (element.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200)
+      if (text && text === prevText) continue
+      prevText = text
+
+      const message = this.parseMessageElement(element, role)
       if (message) {
         messages.push(message)
       }
     }
 
-    // Process assistant messages
-    for (const element of assistantElements) {
-      const message = this.parseMessageElement(element, 'assistant')
-      if (message) {
-        messages.push(message)
-      }
-    }
-
-    // If no messages found with specific selectors, try broader approach
-    if (messages.length === 0) {
-      const allMessageSelectors = [
-        '[class*="query"]',
-        '[class*="response"]',
-        '[class*="content"]'
-      ]
-
-      for (const selector of allMessageSelectors) {
-        document.querySelectorAll(selector).forEach(element => {
-          if (seenElements.has(element)) return
-          seenElements.add(element)
-
-          const isUser = /query|user/i.test(element.className) ||
-                         element.getAttribute('data-message-author-role') === 'user'
-          const role: ChatMessage['role'] = isUser ? 'user' : 'assistant'
-          const message = this.parseMessageElement(element, role)
-          if (message) {
-            messages.push(message)
-          }
-        })
-      }
-    }
-
-    // querySelectorAll already returns elements in DOM order — no sort needed
     return messages
   }
 
@@ -716,7 +700,13 @@ class GeminiParser implements PlatformParser {
       '[class*="action"]',
       '[class*="copy"]',
       '[class*="share"]',
-      '[class*="menu"]'
+      '[class*="menu"]',
+      // Gemini injects static UI crumbs that are not message content
+      '[class*="crumb"]',
+      '[aria-label*="Gemini said"]',
+      '[class*="said"]',
+      '[class*="notebook"]',
+      '[class*="research"]'
     ]
 
     removeSelectors.forEach(selector => {
@@ -739,6 +729,21 @@ class GeminiParser implements PlatformParser {
     } else {
       content = clone.textContent || ''
     }
+
+    // Drop standalone UI crumb lines Gemini renders inside the message body
+    // (e.g. "Gemini said", "New notebook", "Show research", "Show thinking").
+    const UI_CRUMB_PATTERNS = [
+      /^gemini said$/i,
+      /^new notebook$/i,
+      /^show research$/i,
+      /^show thinking$/i,
+      /^show full response$/i,
+      /^view other drafts$/i
+    ]
+    content = content
+      .split('\n')
+      .filter(line => !UI_CRUMB_PATTERNS.some(p => p.test(line.trim())))
+      .join('\n')
 
     return cleanText(content)
   }
@@ -862,7 +867,8 @@ async function main() {
 }
 
 // Listen for messages from popup
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'PARSE_CONVERSATION') {
     parser.parseCurrentConversation().then(conversation => {
       // API detail is preferred when available because it preserves markdown,
@@ -927,6 +933,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
 })
+}
 
 // Run on page load
 main()

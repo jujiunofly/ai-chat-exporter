@@ -248,6 +248,8 @@ export default function Popup() {
         includeMetadata: settings?.includeMetadata ?? true,
         includeCodeBlocks: settings?.includeCodeBlocks ?? true,
         includeImages: settings?.includeImages ?? true,
+        exportArtifacts: settings?.exportArtifacts ?? true,
+        includeUploadedFiles: settings?.includeUploadedFiles ?? true,
         filenamePattern: settings?.filenamePattern
       }
 
@@ -321,6 +323,8 @@ export default function Popup() {
         includeMetadata: settings?.includeMetadata ?? true,
         includeCodeBlocks: settings?.includeCodeBlocks ?? true,
         includeImages: settings?.includeImages ?? true,
+        exportArtifacts: settings?.exportArtifacts ?? true,
+        includeUploadedFiles: settings?.includeUploadedFiles ?? true,
         filenamePattern: settings?.filenamePattern
       }
 

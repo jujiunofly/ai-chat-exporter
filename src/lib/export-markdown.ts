@@ -30,6 +30,23 @@ export function conversationToMarkdown(
     lines.push(...formatMessage(message, options, index))
     lines.push('')
   })
+
+  // Separate "Artifacts" section when requested. This is the markdown
+  // equivalent of "save artifacts/research docs as separate files" — the
+  // references are gathered in one place so they can be split out by tooling.
+  if (options.exportArtifacts) {
+    const artifactRefs = collectArtifactReferences(conversation)
+    if (artifactRefs.length > 0) {
+      lines.push('## Artifacts')
+      lines.push('')
+      lines.push('_AI-generated artifacts and research documents referenced in this conversation:_')
+      lines.push('')
+      artifactRefs.forEach(ref => {
+        lines.push(`- [${ref.name}](${ref.url})`)
+      })
+      lines.push('')
+    }
+  }
   
   // Add footer
   lines.push('---')
@@ -116,7 +133,14 @@ function formatMessage(
   
   // Add images if enabled
   if (options.includeImages && message.attachments?.length) {
-    const images = message.attachments.filter(a => a.type === 'image')
+    // When includeUploadedFiles is OFF, drop references to files the user
+    // uploaded into the chat (heuristic: attachment with no URL = local upload,
+    // or explicitly flagged as uploaded).
+    const attachments = options.includeUploadedFiles === false
+      ? message.attachments.filter(a => a.url && !a.uploaded)
+      : message.attachments
+
+    const images = attachments.filter(a => a.type === 'image')
     if (images.length > 0) {
       lines.push('')
       images.forEach(img => {
@@ -126,7 +150,7 @@ function formatMessage(
     }
     
     // Add other attachments
-    const otherAttachments = message.attachments.filter(a => a.type !== 'image')
+    const otherAttachments = attachments.filter(a => a.type !== 'image')
     if (otherAttachments.length > 0) {
       lines.push('**Attachments:**')
       otherAttachments.forEach(att => {
@@ -140,6 +164,24 @@ function formatMessage(
   }
   
   return lines
+}
+
+/**
+ * Collect artifact / research-document references across all messages so they
+ * can be emitted as a separate "## Artifacts" section when exportArtifacts is on.
+ */
+function collectArtifactReferences(conversation: Conversation): { name: string; url: string }[] {
+  const refs: { name: string; url: string }[] = []
+  const seen = new Set<string>()
+  for (const message of conversation.messages) {
+    for (const att of message.attachments || []) {
+      if (att.url && att.type !== 'image' && !seen.has(att.url)) {
+        seen.add(att.url)
+        refs.push({ name: att.name || att.url, url: att.url })
+      }
+    }
+  }
+  return refs
 }
 
 /**

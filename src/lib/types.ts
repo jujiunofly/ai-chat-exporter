@@ -32,6 +32,9 @@ export interface Attachment {
   url: string
   /** Optional display name */
   name?: string
+  /** True when this is a file the USER uploaded into the chat (vs. an
+   *  AI-generated artifact). Used to honor the includeUploadedFiles option. */
+  uploaded?: boolean
 }
 
 /**
@@ -97,6 +100,13 @@ export interface ExportOptions {
   includeCodeBlocks: boolean
   /** Whether to include images */
   includeImages: boolean
+  /** When true, AI-generated artifacts / research docs are emitted as a
+   *  separate "## Artifacts" section (the markdown equivalent of saving them
+   *  as separate files). When false, they stay inline only. */
+  exportArtifacts?: boolean
+  /** When true, references to files the USER uploaded into the chat are kept.
+   *  When false, uploaded-file references are stripped from the export. */
+  includeUploadedFiles?: boolean
   /** Filename pattern template (e.g., '{date}-{title}') */
   filenamePattern?: string
 }
