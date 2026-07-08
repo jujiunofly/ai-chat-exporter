@@ -145,4 +145,23 @@ describe('GeminiParser message ordering', () => {
     expect(userTexts.filter(t => t === 'yes')).toHaveLength(2)
     expect(userTexts).toEqual(['yes', 'no', 'yes'])
   })
+
+  it('keeps two consecutive messages that share a long (>200 char) opening but differ later', async () => {
+    const sharedPrefix = 'def process(data):\n    # ' + 'x'.repeat(250) + '\n'
+    document.body.innerHTML = `
+      <main>
+        <div class="user-query"><div class="content">${sharedPrefix}first variant</div></div>
+        <div class="model-response"><div class="content"><p>ok</p></div></div>
+        <div class="user-query"><div class="content">${sharedPrefix}second variant</div></div>
+        <div class="model-response"><div class="content"><p>done</p></div></div>
+      </main>
+    `
+    const conversation = await parser.parseCurrentConversation()
+    const userTexts = conversation!.messages.filter(m => m.role === 'user').map(m => m.content)
+    // Both user messages MUST survive (the old slice(0,200) dedup wrongly
+    // collapsed them into one).
+    expect(userTexts).toHaveLength(2)
+    expect(userTexts.filter(t => t.includes('first variant'))).toHaveLength(1)
+    expect(userTexts.filter(t => t.includes('second variant'))).toHaveLength(1)
+  })
 })

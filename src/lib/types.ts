@@ -61,6 +61,10 @@ export interface ConversationArtifact {
   language?: string
   /** MIME type (for document artifacts) */
   mimeType?: string
+  /** Optional URL the artifact/research doc is hosted at (when it is a
+   *  viewable document rather than inline content). Used by the markdown
+   *  "## Artifacts" section so the toggle has real data to list. */
+  url?: string
 }
 
 /**

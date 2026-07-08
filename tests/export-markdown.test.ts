@@ -326,4 +326,92 @@ describe('Export Markdown', () => {
       expect(md).toContain('`code`')
     })
   })
+
+  describe('Artifacts section (exportArtifacts) — independent review review fixes', () => {
+    it('emits the "## Artifacts" section from conversation.artifacts (real store, item B)', () => {
+      const conv = createConversation({
+        artifacts: [
+          { type: 'code', title: 'My Script', content: 'print(1)', language: 'python' },
+          { type: 'html', title: 'Page', content: '<html></html>', url: 'https://example.com/artifact.html' }
+        ]
+      })
+      const md = conversationToMarkdown(conv, { ...defaultOptions, exportArtifacts: true })
+      expect(md).toContain('## Artifacts')
+      // The code artifact has no url -> not listed as a reference; the html one does.
+      expect(md).toContain('[Page](https://example.com/artifact.html)')
+    })
+
+    it('does NOT emit the section when exportArtifacts is off', () => {
+      const conv = createConversation({
+        artifacts: [{ type: 'html', title: 'Page', content: '<html></html>', url: 'https://example.com/a.html' }]
+      })
+      const md = conversationToMarkdown(conv, { ...defaultOptions, exportArtifacts: false })
+      expect(md).not.toContain('## Artifacts')
+    })
+
+    it('escapes crafted artifact titles so markdown injection cannot occur', () => {
+      const conv = createConversation({
+        artifacts: [{ type: 'html', title: '[click me](javascript:alert(1))', content: 'x', url: 'https://safe.example/doc' }]
+      })
+      const md = conversationToMarkdown(conv, { ...defaultOptions, exportArtifacts: true })
+      const section = md.slice(md.indexOf('## Artifacts'))
+      // The injected title must be escaped so it cannot form a second link.
+      expect(section).toContain('\\]')          // escaped ']' so [..](..) can't close
+      expect(section).toContain('\\(')          // escaped '('
+      // The link target must be the safe https url, and no javascript: scheme
+      // can ever reach a markdown link target (sanitizeUrl rejects non-http(s)).
+      expect(section).toMatch(/\]\(https:\/\/safe\.example\/doc\)/)
+      expect(section).not.toMatch(/\]\(javascript:/)
+    })
+
+    it('rejects non-http(s) artifact urls', () => {
+      const conv = createConversation({
+        artifacts: [{ type: 'html', title: 'Bad', content: 'x', url: 'javascript:evil()' }]
+      })
+      const md = conversationToMarkdown(conv, { ...defaultOptions, exportArtifacts: true })
+      const section = md.slice(md.indexOf('## Artifacts'))
+      expect(section).not.toContain('javascript:evil()')
+    })
+
+    it('does NOT list user-uploaded document files when includeUploadedFiles is off', () => {
+      const conv = createConversation({
+        artifacts: [
+          // AI-generated artifact (has content) — always listed when it has a url
+          { type: 'html', title: 'Page', content: '<html></html>', url: 'https://safe.example/a.html' },
+          // User upload (document, no content) — must respect includeUploadedFiles
+          { type: 'document', title: 'my-upload.pdf', content: '', url: 'https://files.example/my-upload.pdf' }
+        ]
+      })
+      const md = conversationToMarkdown(conv, { ...defaultOptions, exportArtifacts: true, includeUploadedFiles: false })
+      const section = md.slice(md.indexOf('## Artifacts'))
+      expect(section).toContain('https://safe.example/a.html')        // AI artifact kept
+      expect(section).not.toContain('my-upload.pdf')                   // upload dropped
+    })
+  })
+
+  describe('includeUploadedFiles toggle — independent review review fix', () => {
+    const convWithUpload = createConversation({
+      messages: [
+        {
+          id: 'm1', role: 'user', content: 'here is a screenshot and a file',
+          attachments: [
+            { type: 'image', url: 'https://img.example/shot.png', name: 'shot', uploaded: true },
+            { type: 'file', url: 'https://files.example/doc.pdf', name: 'doc.pdf', uploaded: true }
+          ]
+        }
+      ]
+    })
+
+    it('when OFF, keeps genuine images but drops uploaded-file references', () => {
+      const md = conversationToMarkdown(convWithUpload, { ...defaultOptions, includeUploadedFiles: false })
+      expect(md).toContain('![shot](https://img.example/shot.png)') // image kept
+      expect(md).not.toContain('doc.pdf') // uploaded file removed
+    })
+
+    it('when ON, keeps both images and uploaded files', () => {
+      const md = conversationToMarkdown(convWithUpload, { ...defaultOptions, includeUploadedFiles: true })
+      expect(md).toContain('![shot](https://img.example/shot.png)')
+      expect(md).toContain('doc.pdf')
+    })
+  })
 })

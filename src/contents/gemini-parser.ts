@@ -636,10 +636,14 @@ export class GeminiParser implements PlatformParser {
           ? 'user' : 'assistant'
 
       // Dedup: skip only if this node is text-identical to the PREVIOUS one we
-      // kept. This removes duplicate DOM copies (sidebar/artifact/“Gemini said”
-      // panels render the same text in adjacent nodes) WITHOUT dropping a
-      // genuine repeated message that appears later in the conversation.
-      const text = (element.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200)
+      // kept. This removes adjacent duplicate DOM copies (sidebar/artifact/
+      // "Gemini said" panels render the same text back-to-back) WITHOUT
+      // dropping a genuine repeated message that appears LATER in the
+      // conversation (non-consecutive). Compare the FULL normalized text — a
+      // 200-char prefix slice would wrongly collapse two different messages
+      // that merely share a long opening (e.g. the same code block pasted
+      // twice with different follow-up text).
+      const text = (element.textContent || '').replace(/\s+/g, ' ').trim()
       if (text && text === prevText) continue
       prevText = text
 

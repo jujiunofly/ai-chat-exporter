@@ -2,7 +2,7 @@
  * Markdown export functionality for conversations
  */
 
-import type { Conversation, ExportOptions, ChatMessage, CodeBlock } from './types'
+import type { Conversation, ExportOptions, ChatMessage, CodeBlock, Attachment } from './types'
 
 /** Platform display name lookup */
 const platformLabels: Record<string, string> = { chatgpt: 'ChatGPT', gemini: 'Google Gemini', claude: 'Claude', deepseek: 'DeepSeek', grok: 'Grok' }
@@ -31,18 +31,23 @@ export function conversationToMarkdown(
     lines.push('')
   })
 
-  // Separate "Artifacts" section when requested. This is the markdown
-  // equivalent of "save artifacts/research docs as separate files" — the
-  // references are gathered in one place so they can be split out by tooling.
+  // Separate "Artifacts" section when requested. Real artifacts are stored on
+  // `conversation.artifacts` (populated by parsers — e.g. Claude's tool_use
+  // blocks). We ALSO surface any artifact/research-document URLs that parsers
+  // attached to individual messages, so the toggle is never silently dead.
   if (options.exportArtifacts) {
-    const artifactRefs = collectArtifactReferences(conversation)
+    const artifactRefs = collectArtifactReferences(conversation, options)
     if (artifactRefs.length > 0) {
       lines.push('## Artifacts')
       lines.push('')
       lines.push('_AI-generated artifacts and research documents referenced in this conversation:_')
       lines.push('')
       artifactRefs.forEach(ref => {
-        lines.push(`- [${ref.name}](${ref.url})`)
+        // Escape markdown link syntax so a crafted title/url cannot inject
+        // markup or a javascript: link.
+        const name = escapeMarkdownLinkText(ref.name)
+        const url = sanitizeUrl(ref.url)
+        lines.push(`- [${name}](${url})`)
       })
       lines.push('')
     }
@@ -133,12 +138,16 @@ function formatMessage(
   
   // Add images if enabled
   if (options.includeImages && message.attachments?.length) {
-    // When includeUploadedFiles is OFF, drop references to files the user
-    // uploaded into the chat (heuristic: attachment with no URL = local upload,
-    // or explicitly flagged as uploaded).
-    const attachments = options.includeUploadedFiles === false
-      ? message.attachments.filter(a => a.url && !a.uploaded)
-      : message.attachments
+    // When includeUploadedFiles is OFF, drop references to FILES the user
+    // uploaded into the chat — but NEVER strip genuine images, which are
+    // conversational content (fixes the previous bug where every image was
+    // removed when the toggle was off). Images are only excluded if they are
+    // explicitly flagged as `uploaded` AND typed as an image by the parser.
+    const uploadedFilter = (a: Attachment) =>
+      options.includeUploadedFiles === false && a.uploaded === true && a.type !== 'image'
+        ? false
+        : true
+    const attachments = message.attachments.filter(uploadedFilter)
 
     const images = attachments.filter(a => a.type === 'image')
     if (images.length > 0) {
@@ -149,7 +158,7 @@ function formatMessage(
       })
     }
     
-    // Add other attachments
+    // Add other (non-image) attachments
     const otherAttachments = attachments.filter(a => a.type !== 'image')
     if (otherAttachments.length > 0) {
       lines.push('**Attachments:**')
@@ -167,21 +176,74 @@ function formatMessage(
 }
 
 /**
- * Collect artifact / research-document references across all messages so they
- * can be emitted as a separate "## Artifacts" section when exportArtifacts is on.
+ * Collect artifact / research-document references so they can be emitted as a
+ * separate "## Artifacts" section when exportArtifacts is on.
+ *
+ * Sources (union, deduped by URL):
+ *  1. `conversation.artifacts` — the real artifact store, populated by parsers
+ *     (e.g. Claude tool_use blocks). This is the primary, authoritative source.
+ *  2. Non-image attachments on individual messages (Gemini research-doc links,
+ *     etc.) — surfaced so the toggle is never silently dead.
  */
-function collectArtifactReferences(conversation: Conversation): { name: string; url: string }[] {
+function collectArtifactReferences(
+  conversation: Conversation,
+  options: ExportOptions
+): { name: string; url: string }[] {
   const refs: { name: string; url: string }[] = []
   const seen = new Set<string>()
-  for (const message of conversation.messages) {
-    for (const att of message.attachments || []) {
-      if (att.url && att.type !== 'image' && !seen.has(att.url)) {
-        seen.add(att.url)
-        refs.push({ name: att.name || att.url, url: att.url })
-      }
+
+  const add = (name: string, url: string) => {
+    if (url && !seen.has(url)) {
+      seen.add(url)
+      refs.push({ name: name || url, url })
     }
   }
+
+  for (const art of conversation.artifacts || []) {
+    // `document`-type entries with no inline content are USER UPLOADS (the
+    // Claude API stores uploaded files here). They must honor includeUploadedFiles.
+    const isUploadedFile = art.type === 'document' && !art.content
+    if (isUploadedFile && options.includeUploadedFiles === false) continue
+
+    // Only emit a reference when a usable URL exists. Inline AI artifacts
+    // (code/html with content) are exported in-place and need no reference.
+    const url = (art as any).url
+    if (url) add(art.title || art.type, url)
+  }
+
+  for (const message of conversation.messages) {
+    for (const att of message.attachments || []) {
+      if (att.url && att.type !== 'image') add(att.name || att.url, att.url)
+    }
+  }
+
   return refs
+}
+
+/**
+ * Escape characters that would break or inject into a markdown link label.
+ * Specifically `]` and `\`. A crafted title like `[click](x)` would otherwise
+ * corrupt the link or inject a second link.
+ */
+function escapeMarkdownLinkText(text: string): string {
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/\]/g, '\\]')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)')
+}
+
+/**
+ * Reject non-http(s) schemes (javascript:, data:, vbscript:) to prevent
+ * markdown link injection. Falls back to an empty string when unsafe.
+ */
+function sanitizeUrl(url: string): string {
+  const trimmed = String(url).trim()
+  if (/^(https?:|mailto:)/i.test(trimmed)) {
+    // Escape spaces and parens so the link target stays well-formed.
+    return trimmed.replace(/\s/g, '%20').replace(/\)/g, '%29')
+  }
+  return ''
 }
 
 /**
