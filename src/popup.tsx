@@ -1,6 +1,7 @@
 /**
  * Popup Component
- * Gemini-designed UI with tab switcher, platform badge, and conversation list
+ * Redesigned UI with collapsible settings, primary actions above the fold,
+ * open-source trust badge, platform awareness, and theme sync.
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
@@ -9,10 +10,14 @@ import { ExportButton } from './components/ExportButton'
 import { FormatSelector } from './components/FormatSelector'
 import { ConversationList } from './components/ConversationList'
 import { FilenameEditor } from './components/FilenameEditor'
+import { Toggle } from './components/Toggle'
+import { Section } from './components/Section'
+import { Pill } from './components/Pill'
 import { conversationToMarkdown, generateMarkdownFilename } from './lib/export-markdown'
 import { exportToPdf } from './lib/export-pdf'
 import { generateFilename } from './lib/filename'
 import { buildDownloadFilename } from './lib/download-path'
+import { t, type Locale } from './lib/i18n'
 import type { 
   Conversation, ExportFormat, ExtensionSettings, ConversationListItem, 
   BulkExportProgress
@@ -23,14 +28,14 @@ type TabMode = 'current' | 'bulk'
 
 /** Inline SVG Icons */
 const SettingsIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="3"></circle>
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
   </svg>
 )
 
 const RefreshIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="23 4 23 10 17 10"></polyline>
     <polyline points="1 20 1 14 7 14"></polyline>
     <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
@@ -38,9 +43,58 @@ const RefreshIcon = () => (
 )
 
 const AiIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
   </svg>
+)
+
+const ChevronIcon = ({ direction }: { direction: 'up' | 'down' }) => (
+  <svg 
+    width="12" 
+    height="12" 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="2.5" 
+    strokeLinecap="round" 
+    strokeLinejoin="round"
+    style={{ 
+      transform: direction === 'up' ? 'rotate(180deg)' : 'none', 
+      transition: 'transform 200ms cubic-bezier(0.4, 0, 0.2, 1)' 
+    }}
+  >
+    <polyline points="6 9 12 15 18 9"></polyline>
+  </svg>
+)
+
+/** Sun icon (light mode) */
+const SunIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="4"></circle>
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+  </svg>
+)
+
+/** Moon icon (dark mode) */
+const MoonIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+  </svg>
+)
+
+const GithubChip = () => (
+  <a
+    href="https://github.com/pinguarmy/ai-chat-exporter"
+    target="_blank"
+    rel="noopener noreferrer"
+    className="github-chip"
+    title="View GitHub Repository"
+  >
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '4px' }}>
+      <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+    </svg>
+    <span>100% free · open source</span>
+  </a>
 )
 
 /**
@@ -79,6 +133,7 @@ export default function Popup() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [settings, setSettings] = useState<ExtensionSettings | null>(null)
+  const [optionsOpen, setOptionsOpen] = useState(false)
   
   // Bulk export state
   const [tabMode, setTabMode] = useState<TabMode>('current')
@@ -92,6 +147,11 @@ export default function Popup() {
     current: '',
     status: 'idle'
   })
+  const [bulkOptionsOpen, setBulkOptionsOpen] = useState(false)
+
+  // Locale-bound translator
+  const locale: Locale = settings?.locale ?? 'en'
+  const T = (key: string) => t(key, locale)
 
   // Load settings on mount
   useEffect(() => {
@@ -114,6 +174,16 @@ export default function Popup() {
       chrome.tabs.onUpdated.removeListener(handleTabUpdate)
     }
   }, [])
+
+  // Synchronize theme with html attribute and support prefers-color-scheme
+  useEffect(() => {
+    if (settings?.theme) {
+      document.documentElement.setAttribute('data-theme', settings.theme)
+    } else {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light')
+    }
+  }, [settings?.theme])
 
   /**
    * Load extension settings
@@ -150,6 +220,10 @@ export default function Popup() {
 
       if (response?.data) {
         setConversation(response.data)
+        // Set in storage for the preview page
+        await chrome.storage.local.set({
+          [`conversation-${response.data.id}`]: response.data
+        })
         setError(null)
       } else {
         setConversation(null)
@@ -203,7 +277,7 @@ export default function Popup() {
    */
   const handleExport = useCallback(async () => {
     if (!conversation) {
-      setError('No conversation to export')
+      setError(T('No conversation to export'))
       return
     }
 
@@ -277,16 +351,16 @@ export default function Popup() {
         })
         
         setTimeout(() => URL.revokeObjectURL(url), 1000)
-        setSuccess('Exported as Markdown!')
+        setSuccess(T('Exported as Markdown!'))
         clearSuccess()
       } else {
         const filename = buildDownloadFilename(baseFilename, exportConversation.platform, '.pdf', downloadFolder, customFolderName)
         await exportToPdf(exportConversation, exportOptions, filename)
-        setSuccess('PDF exported successfully!')
+        setSuccess(T('PDF exported successfully!'))
         clearSuccess()
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Export failed')
+      setError(err instanceof Error ? err.message : T('Export failed'))
     } finally {
       setLoading(false)
     }
@@ -297,7 +371,7 @@ export default function Popup() {
    */
   const handleBulkExport = useCallback(async () => {
     if (selectedIds.length === 0) {
-      setError('No conversations selected')
+      setError(T('No conversations selected'))
       return
     }
 
@@ -373,7 +447,7 @@ export default function Popup() {
 
           if (format === 'markdown') {
             const markdown = conversationToMarkdown(conv, exportOptions)
-            const filename = buildDownloadFilename(baseFilename, convItem.platform, '.md', downloadFolder, customFolderName)
+            const filename = buildDownloadFilename(baseFilename, conv.platform, '.md', downloadFolder, customFolderName)
             const blob = new Blob([markdown], { type: 'text/markdown' })
             const url = URL.createObjectURL(blob)
             
@@ -385,7 +459,7 @@ export default function Popup() {
             
             setTimeout(() => URL.revokeObjectURL(url), 1000)
           } else {
-            const filename = buildDownloadFilename(baseFilename, convItem.platform, '.pdf', downloadFolder, customFolderName)
+            const filename = buildDownloadFilename(baseFilename, conv.platform, '.pdf', downloadFolder, customFolderName)
             await exportToPdf(conv, exportOptions, filename)
           }
 
@@ -406,17 +480,31 @@ export default function Popup() {
         status: 'done'
       }))
       
-      setSuccess(`Bulk export completed!`)
+      setSuccess(T('Bulk export completed!'))
     } catch (err) {
       setBulkProgress(prev => ({
         ...prev,
         status: 'error'
       }))
-      setError(err instanceof Error ? err.message : 'Bulk export failed')
+      setError(err instanceof Error ? err.message : T('Bulk export failed'))
     } finally {
       setLoading(false)
     }
   }, [selectedIds, conversationList, format, settings])
+
+  /**
+   * Handle settings toggle changes
+   */
+  const handleOptionChange = async (key: keyof ExtensionSettings, value: any) => {
+    if (!settings) return
+    const updated = { ...settings, [key]: value }
+    setSettings(updated)
+    try {
+      await chrome.storage.local.set({ settings: updated })
+    } catch (err) {
+      console.error('Failed to save settings:', err)
+    }
+  }
 
   /**
    * Handle conversation selection
@@ -457,6 +545,28 @@ export default function Popup() {
     }
   }
 
+  /**
+   * Estimate conversation file size in KB for Live Preview
+   */
+  const estimateSize = (conv: Conversation) => {
+    try {
+      const exportOptions = {
+        format: 'markdown' as ExportFormat,
+        includeMetadata: settings?.includeMetadata ?? true,
+        includeCodeBlocks: settings?.includeCodeBlocks ?? true,
+        includeImages: settings?.includeImages ?? true,
+        exportArtifacts: settings?.exportArtifacts ?? true,
+        includeUploadedFiles: settings?.includeUploadedFiles ?? true
+      }
+      const markdown = conversationToMarkdown(conv, exportOptions)
+      const bytes = new Blob([markdown]).size
+      if (bytes < 1024) return `${bytes} B`
+      return `${(bytes / 1024).toFixed(1)} KB`
+    } catch {
+      return '0 KB'
+    }
+  }
+
   const platformLabel = platform === 'chatgpt' ? 'ChatGPT' : platform === 'gemini' ? 'Gemini' : platform === 'claude' ? 'Claude' : platform === 'deepseek' ? 'DeepSeek' : platform === 'grok' ? 'Grok' : null
   const allSelected = conversationList.length > 0 && selectedIds.length === conversationList.length
 
@@ -464,85 +574,124 @@ export default function Popup() {
     <div className="popup-container">
       {/* Header */}
       <div className="popup-header">
-        <h1>AI Chat Exporter</h1>
-        <button className="btn-icon" onClick={openOptions} title="Settings">
-          <SettingsIcon />
-        </button>
+        <div className="flex-col gap-1">
+          <h1>AI Chat Exporter</h1>
+          <div><GithubChip /></div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            className="btn-icon"
+            onClick={() => handleOptionChange('theme', settings?.theme === 'dark' ? 'light' : 'dark')}
+            title={T('Toggle Theme')}
+            aria-label={T('Toggle Theme')}
+          >
+            {settings?.theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+          </button>
+          <button 
+            className="btn-icon" 
+            onClick={openOptions} 
+            title={T('Open Settings')}
+            aria-label={T('Open Settings')}
+          >
+            <SettingsIcon />
+          </button>
+        </div>
       </div>
       
       {/* Body */}
       <div className="popup-body">
         {/* Tabs */}
         <div className="tabs">
-          <div 
+          <button 
+            type="button"
             className={`tab ${tabMode === 'current' ? 'active' : ''}`} 
             onClick={() => setTabMode('current')}
           >
-            Current
-          </div>
-          <div 
-            className={`tab ${tabMode === 'bulk' ? 'active' : ''}`} 
+            {T('Current Chat')}
+          </button>
+          <button 
+            type="button"
+            className={`tab ${tabMode === 'bulk' ? 'active' : ''}`}
             onClick={switchToBulk}
           >
-            Bulk
-          </div>
+            {T('Bulk Export')}
+          </button>
         </div>
 
         {/* Current Tab */}
         {tabMode === 'current' && (
-          <div className="tab-content" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div className="tab-content">
             {!platform ? (
-              <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
-                <p>Navigate to ChatGPT, Gemini, Claude, DeepSeek, or Grok to export conversations.</p>
+              <div className="empty-state">
+                <div style={{ background: 'var(--bg-tertiary)', padding: '12px', borderRadius: '50%' }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                  </svg>
+                </div>
+                <div className="flex-col gap-1 items-center">
+                  <p style={{ fontWeight: 600, fontSize: '14px', color: 'var(--text-primary)' }}>{T('No Chat Detected')}</p>
+                  <p className="text-xs text-muted" style={{ textAlign: 'center', maxWidth: '240px', lineHeight: 1.4 }}>
+                    {T('Open a conversation on a supported platform to export:')}
+                  </p>
+                </div>
+                <div className="flex justify-center flex-wrap gap-1 mt-1">
+                  <span className="badge chatgpt">ChatGPT</span>
+                  <span className="badge gemini">Gemini</span>
+                  <span className="badge claude">Claude</span>
+                  <span className="badge deepseek">DeepSeek</span>
+                  <span className="badge grok">Grok</span>
+                </div>
               </div>
             ) : !conversation ? (
-              <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
-                <p>No conversation detected on this page.</p>
-                <p className="text-xs" style={{ marginTop: '8px', color: 'var(--text-tertiary)' }}>
-                  Make sure you're viewing a conversation.
-                </p>
+              <div className="empty-state">
+                <div style={{ background: 'var(--primary-light)', padding: '12px', borderRadius: '50%' }}>
+                  <span className="spinner" style={{ borderTopColor: 'var(--primary)', width: '22px', height: '22px' }}></span>
+                </div>
+                <div className="flex-col gap-1 items-center">
+                  <p style={{ fontWeight: 600, fontSize: '14px', color: 'var(--text-primary)' }}>{T('Detecting...')}</p>
+                  <p className="text-xs text-muted" style={{ textAlign: 'center' }}>{T('Extracting conversation content')}</p>
+                </div>
               </div>
             ) : (
               <>
-                {/* Platform badge + Title + Message count */}
+                {/* Platform Badge + Conversation Info Card */}
                 <div className="conversation-info">
-                  <div className={`badge ${platform}`}>
-                    <AiIcon /> {platformLabel}
+                  <div className="conversation-info-header">
+                    <Pill 
+                      label={platformLabel || ''} 
+                      platform={platform} 
+                      icon={<AiIcon />} 
+                    />
                   </div>
-                  <h2>{conversation.title || 'Untitled Conversation'}</h2>
-                  <span className="msg-count">{conversation.messages.length} messages</span>
+                  <h2>{conversation.title || T('Untitled Conversation')}</h2>
+                  <div className="preview-summary">
+                    <span>{t('{0} messages', locale, conversation.messages.length)} · {estimateSize(conversation)}</span>
+                    <button
+                      type="button"
+                      className="link-btn"
+                      onClick={() => {
+                        chrome.tabs.create({
+                          url: chrome.runtime.getURL('tabs/preview.html') + `?id=${conversation.id}`
+                        })
+                      }}
+                      title={T('Live Preview ↗')}
+                    >
+                      {T('Live Preview ↗')}
+                    </button>
+                  </div>
                 </div>
 
-                {/* Format Selector */}
+                {/* Primary Row Layout Above Fold */}
                 <div className="flex-col gap-2">
-                  <span className="section-label">Export Format</span>
+                  <span className="section-label">{T('Quick Export')}</span>
                   <FormatSelector value={format} onChange={setFormat} disabled={loading} />
                 </div>
 
-                {/* Filename Editor */}
-                <FilenameEditor
-                  value={settings?.filenamePattern || '{date}-{title}'}
-                  onChange={(pattern) => {
-                    if (settings) {
-                      setSettings({ ...settings, filenamePattern: pattern })
-                    }
-                  }}
-                  conversation={conversation}
-                  disabled={loading}
-                />
+                {/* Status Messages */}
+                {error && <div className="message error" role="alert">{error}</div>}
+                {success && <div className="message success" role="alert">{success}</div>}
 
-                {/* Export Button + Status */}
-                <div style={{ marginTop: 'auto' }}>
-                  {error && (
-                    <div className="message error" role="alert" style={{ marginBottom: '8px' }}>
-                      {error}
-                    </div>
-                  )}
-                  {success && (
-                    <div className="message success" style={{ marginBottom: '8px' }}>
-                      {success}
-                    </div>
-                  )}
+                <div className="mt-1">
                   <ExportButton
                     onClick={handleExport}
                     disabled={!conversation}
@@ -551,6 +700,75 @@ export default function Popup() {
                     isSuccess={!!success}
                   />
                 </div>
+
+                {/* Collapsible Advanced Settings (Under Fold) */}
+                <div className="flex-col">
+                  <button 
+                    type="button"
+                    className="options-toggle-btn"
+                    onClick={() => setOptionsOpen(!optionsOpen)}
+                    aria-expanded={optionsOpen}
+                  >
+                    <span>{T('Advanced Export Options')}</span>
+                    <ChevronIcon direction={optionsOpen ? 'up' : 'down'} />
+                  </button>
+
+                  <div className={`options-panel-container ${optionsOpen ? 'open' : ''}`}>
+                    <div className="flex-col gap-3 mt-2 pb-2">
+                      <FilenameEditor
+                        value={settings?.filenamePattern || '{date}-{title}'}
+                        onChange={(pattern) => {
+                          if (settings) {
+                            handleOptionChange('filenamePattern', pattern)
+                          }
+                        }}
+                        conversation={conversation}
+                        disabled={loading}
+                      />
+
+                      <Section title={T('Export Content')}>
+                        <Toggle
+                          label={T('Include Metadata')}
+                          description={T('Add date, title, and platform at the top of exports')}
+                          checked={settings?.includeMetadata ?? true}
+                          onChange={(val) => handleOptionChange('includeMetadata', val)}
+                          disabled={loading}
+                        />
+                        <Toggle
+                          label={T('Include Code Blocks')}
+                          description={T('Export code blocks in messages')}
+                          checked={settings?.includeCodeBlocks ?? true}
+                          onChange={(val) => handleOptionChange('includeCodeBlocks', val)}
+                          disabled={loading}
+                        />
+                        <Toggle
+                          label={T('Include Images')}
+                          description={T('Export images embedded in conversations')}
+                          checked={settings?.includeImages ?? true}
+                          onChange={(val) => handleOptionChange('includeImages', val)}
+                          disabled={loading}
+                        />
+                        <Toggle
+                          label={T('Include Uploaded Files')}
+                          description={T('Preserve references to files you uploaded to chat')}
+                          checked={settings?.includeUploadedFiles ?? true}
+                          onChange={(val) => handleOptionChange('includeUploadedFiles', val)}
+                          disabled={loading}
+                        />
+                      </Section>
+
+                      <Section title={T('Structure')}>
+                        <Toggle
+                          label={T('Export Artifacts')}
+                          description={T('Isolate code artifacts and documents')}
+                          checked={settings?.exportArtifacts ?? true}
+                          onChange={(val) => handleOptionChange('exportArtifacts', val)}
+                          disabled={loading}
+                        />
+                      </Section>
+                    </div>
+                  </div>
+                </div>
               </>
             )}
           </div>
@@ -558,32 +776,39 @@ export default function Popup() {
 
         {/* Bulk Tab */}
         {tabMode === 'bulk' && (
-          <div className="tab-content" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {/* Platform badge + Refresh */}
+          <div className="tab-content" style={{ gap: '10px' }}>
+            {/* Platform Badge + Refresh */}
             <div className="flex justify-between items-center">
-              <div className={`badge ${platform || ''}`}>
-                <AiIcon /> {platformLabel || 'Unknown'}
-              </div>
+              <Pill 
+                label={platformLabel || T('Unknown')} 
+                platform={platform || 'unknown'} 
+                icon={<AiIcon />} 
+              />
               <button 
-                className="btn-icon flex items-center gap-1" 
+                type="button"
+                className="btn btn-outline btn-compact flex items-center gap-1" 
                 onClick={fetchConversationList}
                 disabled={bulkLoading}
+                title={T('Refresh conversation list')}
+                aria-label={T('Refresh conversation list')}
               >
                 <RefreshIcon /> 
-                <span className="text-xs">Refresh</span>
+                <span className="text-xs font-bold">{T('Refresh')}</span>
               </button>
             </div>
             
             {/* Conversation count */}
-            <span className="text-xs text-muted">
-              {bulkLoading ? 'Loading...' : `${conversationList.length} conversations found`}
+            <span className="text-xs text-muted" style={{ marginTop: '-4px' }}>
+              {bulkLoading ? T('Loading conversations...') : `${conversationList.length} ${T('conversations found')}`}
             </span>
 
-            {/* Bulk progress */}
+            {/* Bulk progress bar */}
             {bulkProgress.status !== 'idle' && bulkProgress.status !== 'done' && (
               <div className="flex-col gap-1">
-                <div className="flex justify-between text-xs">
-                  <span>Exporting {bulkProgress.current}...</span>
+                <div className="flex justify-between text-xs font-medium">
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '280px' }}>
+                    {bulkProgress.status === 'fetching' ? T('Fetching...') : `${T('Exporting:')}${bulkProgress.current}`}
+                  </span>
                   <span>{Math.round((bulkProgress.completed / bulkProgress.total) * 100)}%</span>
                 </div>
                 <div className="progress-bg">
@@ -595,16 +820,17 @@ export default function Popup() {
               </div>
             )}
 
-            {/* Select All */}
+            {/* Select All Checkbox */}
             {conversationList.length > 0 && (
-              <label className="checkbox-wrapper p-2" style={{ borderBottom: '1px solid var(--border-light)', paddingBottom: '8px' }}>
+              <label className="checkbox-wrapper p-2 border-b" style={{ paddingBottom: '6px' }}>
                 <input 
                   type="checkbox" 
                   className="checkbox" 
                   checked={allSelected} 
                   onChange={handleToggleAll} 
+                  aria-label="Select all conversations"
                 />
-                <span className="text-sm font-medium">Select All / Deselect</span>
+                <span className="text-xs font-bold text-secondary">{T('Select All / Deselect')}</span>
               </label>
             )}
 
@@ -617,42 +843,108 @@ export default function Popup() {
               onDeselectAll={() => setSelectedIds([])}
               onExport={handleBulkExport}
               loading={loading}
+              bulkLoading={bulkLoading}
+              T={T}
             />
 
-            {/* Selected count + Format + Export */}
-            <div className="flex justify-between items-center mt-2">
-              <span className="text-sm font-medium">{selectedIds.length} selected</span>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted">Format:</span>
+            {/* Selected count + Format Selector */}
+            <div className="flex justify-between items-center mt-1">
+              <span className="text-xs font-bold text-secondary">{selectedIds.length} {T('selected')}</span>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted font-medium">{T('Format:')}</span>
                 <select 
                   className="select"
                   value={format} 
                   onChange={e => setFormat(e.target.value as ExportFormat)}
+                  aria-label="Select format for bulk export"
                 >
+                  <option value="markdown">Markdown</option>
                   <option value="pdf">PDF</option>
-                  <option value="markdown">MD</option>
                 </select>
               </div>
             </div>
 
+            {/* Collapsible Advanced Export Options (Bulk) */}
+            <div className="flex-col">
+              <button 
+                type="button"
+                className="options-toggle-btn"
+                onClick={() => setBulkOptionsOpen(!bulkOptionsOpen)}
+                aria-expanded={bulkOptionsOpen}
+              >
+                <span>{T('Advanced Export Options')}</span>
+                <ChevronIcon direction={bulkOptionsOpen ? 'up' : 'down'} />
+              </button>
+
+              <div className={`options-panel-container ${bulkOptionsOpen ? 'open' : ''}`}>
+                <div className="flex-col gap-3 mt-2 pb-2">
+                  <FilenameEditor
+                    value={settings?.filenamePattern || '{date}-{title}'}
+                    onChange={(pattern) => {
+                      if (settings) {
+                        handleOptionChange('filenamePattern', pattern)
+                      }
+                    }}
+                    conversation={conversation}
+                    disabled={loading}
+                  />
+
+                  <Section title={T('Export Content')}>
+                    <Toggle
+                      label={T('Include Metadata')}
+                      description={T('Add date, title, and platform at the top of exports')}
+                      checked={settings?.includeMetadata ?? true}
+                      onChange={(val) => handleOptionChange('includeMetadata', val)}
+                      disabled={loading}
+                    />
+                    <Toggle
+                      label={T('Include Code Blocks')}
+                      description={T('Export code blocks in messages')}
+                      checked={settings?.includeCodeBlocks ?? true}
+                      onChange={(val) => handleOptionChange('includeCodeBlocks', val)}
+                      disabled={loading}
+                    />
+                    <Toggle
+                      label={T('Include Images')}
+                      description={T('Export images embedded in conversations')}
+                      checked={settings?.includeImages ?? true}
+                      onChange={(val) => handleOptionChange('includeImages', val)}
+                      disabled={loading}
+                    />
+                    <Toggle
+                      label={T('Include Uploaded Files')}
+                      description={T('Preserve references to files you uploaded to chat')}
+                      checked={settings?.includeUploadedFiles ?? true}
+                      onChange={(val) => handleOptionChange('includeUploadedFiles', val)}
+                      disabled={loading}
+                    />
+                  </Section>
+
+                  <Section title={T('Structure')}>
+                    <Toggle
+                      label={T('Export Artifacts')}
+                      description={T('Isolate code artifacts and documents')}
+                      checked={settings?.exportArtifacts ?? true}
+                      onChange={(val) => handleOptionChange('exportArtifacts', val)}
+                      disabled={loading}
+                    />
+                  </Section>
+                </div>
+              </div>
+            </div>
+
+            {/* Status Messages */}
+            {error && <div className="message error" role="alert">{error}</div>}
+            {success && <div className="message success" role="alert">{success}</div>}
+
             {/* Export Button */}
-            <div style={{ marginTop: 'auto' }}>
-              {error && (
-                <div className="message error" role="alert" style={{ marginBottom: '8px' }}>
-                  {error}
-                </div>
-              )}
-              {success && (
-                <div className="message success" style={{ marginBottom: '8px' }}>
-                  {success}
-                </div>
-              )}
+            <div className="mt-1">
               <ExportButton
                 onClick={handleBulkExport}
                 disabled={selectedIds.length === 0}
                 loading={loading}
                 format={format}
-                text={`Export ${selectedIds.length} Selected`}
+                text={`${T('Export')} ${selectedIds.length} ${T('Selected')}`}
               />
             </div>
           </div>

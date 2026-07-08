@@ -14,6 +14,8 @@ interface ConversationListProps {
   onDeselectAll: () => void
   onExport: () => void
   loading?: boolean
+  bulkLoading?: boolean
+  T?: (key: string) => string
 }
 
 /**
@@ -26,7 +28,9 @@ export function ConversationList({
   onSelectAll,
   onDeselectAll,
   onExport,
-  loading = false
+  loading = false,
+  bulkLoading = false,
+  T
 }: ConversationListProps) {
   const allSelected = conversations.length > 0 && 
                      selectedIds.length === conversations.length
@@ -63,9 +67,9 @@ export function ConversationList({
         ))}
       </div>
       
-      {conversations.length === 0 && (
+      {conversations.length === 0 && !bulkLoading && (
         <div className="text-sm text-muted" style={{ textAlign: 'center', padding: '24px' }}>
-          No conversations found. Click Refresh to load.
+          {T ? T('No conversations found. Click Refresh to load.') : 'No conversations found. Click Refresh to load.'}
         </div>
       )}
     </div>

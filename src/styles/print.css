@@ -2,12 +2,21 @@
  * Print & Preview Styles — Gemini-inspired design system
  */
 
-@import './popup.css';
+/* Override popup.css body width for full-page preview */
+body {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 100%;
+  min-height: 100vh;
+  background: var(--bg-secondary);
+  overflow-x: hidden;
+}
 
 /* ===== Preview Container ===== */
 .preview-container {
-  max-width: 800px;
-  margin: 40px auto;
+  width: min(960px, calc(100vw - 48px));
+  max-width: none;
+  margin: 32px auto 48px;
   background: var(--bg-primary);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
@@ -27,12 +36,20 @@
   gap: 24px;
 }
 
+.preview-message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 /* ===== Chat Bubbles ===== */
 .chat-bubble {
-  max-width: 85%;
+  max-width: min(78%, 680px);
   padding: 16px;
   border-radius: var(--radius-lg);
   line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .chat-bubble.user {
@@ -79,6 +96,26 @@
 .preview-actions {
   display: flex;
   gap: 8px;
+}
+
+@media (max-width: 760px) {
+  .preview-container {
+    width: calc(100vw - 24px);
+    margin: 12px auto 32px;
+    border-radius: var(--radius-md);
+  }
+
+  .preview-header {
+    padding: 18px;
+  }
+
+  .preview-body {
+    padding: 18px;
+  }
+
+  .chat-bubble {
+    max-width: 100%;
+  }
 }
 
 /* ===== Print Media Query ===== */

@@ -1,9 +1,7 @@
 /**
- * Options Page Styles — Gemini-inspired design system
- * Shares CSS custom properties with popup.css
+ * Options Page Styles — full-page settings dashboard
+ * Shares CSS custom properties with popup.css, then overrides popup-only layout.
  */
-
-@import './popup.css';
 
 * {
   box-sizing: border-box;
@@ -13,18 +11,120 @@
 
 body {
   font-family: var(--font-stack);
-  background-color: var(--bg-tertiary);
+  width: auto !important;
+  min-width: 0 !important;
+  min-height: 100vh;
+  background-color: var(--bg-secondary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 .options-container {
-  max-width: 600px;
-  margin: 40px auto;
-  background: var(--bg-primary);
+  width: min(920px, calc(100vw - 48px));
+  max-width: none;
+  margin: 32px auto 48px;
+  padding: 0 0 40px;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.options-hero {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px 28px;
+  margin-bottom: 12px;
   border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
   box-shadow: var(--shadow-md);
-  padding: 32px;
+}
+
+.options-hero-title {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.options-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.options-hero h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-primary);
+  font-size: 26px;
+  font-weight: 750;
+  line-height: 1.1;
+}
+
+.options-kicker {
+  margin-bottom: 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.options-version {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  flex-shrink: 0;
+  padding: 0 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
+}
+
+.options-card {
+  grid-column: span 6;
+  margin-bottom: 0;
+  padding: 22px;
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-sm);
+}
+
+.filename-card,
+.schedule-card {
+  grid-column: 1 / -1;
+}
+
+.about-card {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+
+.options-card-header {
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.options-card-header h2 {
+  font-size: 16px;
+  letter-spacing: 0;
+  color: var(--text-primary);
+  line-height: 1.2;
 }
 
 .options-section {
@@ -50,9 +150,15 @@ body {
 
 .options-row {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
+  gap: 24px;
   padding: 12px 0;
+}
+
+.options-row > div:first-child {
+  flex: 1;
+  max-width: 520px;
 }
 
 .options-row .option-label {
@@ -64,6 +170,193 @@ body {
   font-size: 12px;
   color: var(--text-tertiary);
   margin-top: 4px;
+  max-width: 360px;
+}
+
+.options-row > select,
+.options-row > input,
+.options-row > .input {
+  flex-shrink: 0;
+}
+
+.options-select,
+.options-control {
+  width: 176px !important;
+}
+
+.options-select,
+.platform-controls select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' stroke='%2364748b' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 14px;
+  padding-right: 36px;
+  height: 38px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-medium);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  transition: var(--transition);
+}
+
+.options-select:focus-visible {
+  border-color: var(--primary);
+}
+
+.options-select:hover:not(:focus-visible) {
+  border-color: var(--text-tertiary);
+}
+
+.options-number {
+  width: 88px !important;
+}
+
+.options-range {
+  width: 176px;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+
+.options-row-divider {
+  margin-top: 6px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.options-card-intro {
+  margin-bottom: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.filename-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 9px 11px;
+  border: 1px dashed var(--border-medium);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.filename-preview span {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.filename-preview code {
+  min-width: 0;
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.schedule-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  animation: fadeIn 200ms ease;
+}
+
+.platform-schedule-section {
+  margin-top: 8px;
+}
+
+.platform-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.platform-card {
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  opacity: 0.62;
+  transition: var(--transition);
+}
+
+.platform-card.is-enabled {
+  opacity: 1;
+}
+
+.platform-controls {
+  display: grid;
+  grid-template-columns: 1fr 78px;
+  gap: 10px;
+  margin-top: 10px;
+  animation: fadeIn 150ms ease;
+}
+
+.platform-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.platform-controls span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.platform-controls select,
+.platform-controls input {
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.status-panel {
+  margin-top: 16px;
+  padding: 13px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.btn-compact {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.block {
+  display: block;
+}
+
+.text-primary {
+  color: var(--primary);
+}
+
+.cursor-pointer {
+  cursor: pointer;
 }
 
 /* Save Notification */
@@ -93,9 +386,70 @@ body {
 }
 
 /* Responsive */
-@media (max-width: 480px) {
+@media (max-width: 900px) {
   .options-container {
-    margin: 16px;
-    padding: 16px;
+    width: min(100vw - 32px, 720px);
+    margin: 24px auto;
+    display: block;
+    padding-bottom: 32px;
+  }
+
+  .options-hero {
+    margin-bottom: 18px;
+  }
+
+  .options-card {
+    margin-bottom: 18px;
+  }
+
+  .options-row {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 560px) {
+  .options-container {
+    width: calc(100vw - 24px);
+    margin: 12px auto;
+  }
+
+  .options-card {
+    padding: 18px;
+  }
+
+  .options-hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .options-row {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .options-row > select,
+  .options-row > input,
+  .options-row > .input {
+    width: 100% !important;
+  }
+
+  .options-row > div:first-child {
+    max-width: none;
+  }
+
+  .options-number {
+    width: 120px !important;
+  }
+
+  .options-range {
+    width: 100%;
+  }
+
+  .platform-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-controls {
+    grid-template-columns: 1fr;
   }
 }

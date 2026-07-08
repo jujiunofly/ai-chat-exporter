@@ -190,7 +190,7 @@ class ChatGPTParser implements PlatformParser {
             url: `https://chatgpt.com/c/${item.id}`,
             platform: 'chatgpt',
             messageCount: item.message_count || item.messageCount || undefined,
-            createdAt: item.create_time ? new Date(item.create_time).getTime() : undefined
+            createdAt: item.create_time ? new Date(item.create_time * 1000).getTime() : undefined
           })
         }
 
@@ -266,12 +266,13 @@ class ChatGPTParser implements PlatformParser {
             const msg = node.message
             const role = msg.author?.role
             if (role === 'user' || role === 'assistant') {
-              const content = msg.content?.parts?.join('\n') || ''
+              const { text: content, attachments: partAttachments } = this.extractParts(msg.content?.parts)
               if (content.trim()) {
                 messages.push({
                   id: msg.id || generateId(),
                   role: role as ChatMessage['role'],
                   content: content.trim(),
+                  attachments: partAttachments.length ? partAttachments : undefined,
                 })
               }
             }
@@ -292,12 +293,13 @@ class ChatGPTParser implements PlatformParser {
         for (const msg of data.messages) {
           const role = msg.author?.role || msg.role
           if (role === 'user' || role === 'assistant') {
-            const content = msg.content?.parts?.join('\n') || msg.content || ''
+            const { text: content, attachments: partAttachments } = this.extractParts(msg.content?.parts)
             if (content.trim()) {
               messages.push({
                 id: msg.id || generateId(),
                 role: role as ChatMessage['role'],
-                content: typeof content === 'string' ? content.trim() : String(content).trim(),
+                content: content.trim(),
+                attachments: partAttachments.length ? partAttachments : undefined,
               })
             }
           }
@@ -309,7 +311,7 @@ class ChatGPTParser implements PlatformParser {
         title: data.title || this.getConversationTitle(),
         url: `https://chatgpt.com/c/${id}`,
         messages,
-        createdAt: data.create_time ? new Date(data.create_time).getTime() : undefined,
+        createdAt: data.create_time ? new Date(data.create_time * 1000).getTime() : undefined,
         platform: 'chatgpt'
       }
     } catch (error) {
@@ -505,6 +507,31 @@ class ChatGPTParser implements PlatformParser {
     return cleanText(content)
   }
   
+  /**
+   * Extract text and attachments from ChatGPT message content parts.
+   * ChatGPT API content parts are objects with .text, .type, etc. — not strings.
+   */
+  private extractParts(parts: any[] | undefined): { text: string; attachments: {type:'image'|'file', url:string, name?:string}[] } {
+    const textParts: string[] = []
+    const attachments: {type:'image'|'file', url:string, name?:string}[] = []
+    if (!parts || !Array.isArray(parts)) return { text: '', attachments }
+    for (const part of parts) {
+      if (!part || typeof part !== 'object') {
+        if (typeof part === 'string') textParts.push(part)
+        continue
+      }
+      if (typeof part.text === 'string') {
+        textParts.push(part.text)
+      } else if (part.type === 'image_file' || part.type === 'file') {
+        const url = (part.file && part.file.url) || ''
+        attachments.push({ type: 'file', url, name: part.name || 'Uploaded file' })
+      } else if (part.type === 'image_url' && part.image_url && part.image_url.url) {
+        attachments.push({ type: 'image', url: part.image_url.url, name: 'Image' })
+      }
+    }
+    return { text: textParts.join('\n').trim(), attachments }
+  }
+
   /**
    * Extract conversation creation timestamp
    */

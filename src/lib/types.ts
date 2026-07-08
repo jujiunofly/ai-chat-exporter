@@ -217,6 +217,8 @@ export interface ExtensionSettings {
   exportArtifacts: boolean
   /** Whether to include uploaded file references */
   includeUploadedFiles: boolean
+  /** UI language */
+  locale: 'en' | 'zh-CN' | 'zh-TW'
   /** Scheduled export configuration */
   scheduledExport?: ScheduledExportSettings
 }
@@ -230,6 +232,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   includeCodeBlocks: true,
   includeImages: true,
   theme: 'light',
+  locale: 'en',
   filenamePattern: '{date}-{title}',
   downloadFolder: 'default',
   customFolderName: 'AI Chat Exports',

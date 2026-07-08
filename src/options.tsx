@@ -1,11 +1,14 @@
 /**
  * Options Page Component
- * Gemini-inspired settings layout with Export Configuration, Filename Pattern,
- * Scheduled Export, and About sections
+ * Redesigned settings page featuring visually distinct card layouts,
+ * theme configuration, auto-save feedback, and rate-limiting scheduled exports.
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
+import './styles/popup.css'
 import './styles/options.css'
+import { Toggle } from './components/Toggle'
+import { Section } from './components/Section'
 import type {
   ExtensionSettings,
   ExportFormat,
@@ -17,6 +20,10 @@ import type {
 } from './lib/types'
 import { DEFAULT_SETTINGS } from './lib/types'
 import { getDefaultScheduledExportSettings } from './lib/scheduled-export'
+import { t, type Locale } from './lib/i18n'
+
+/** App version pulled from the extension manifest (single source of truth) */
+const APP_VERSION = chrome.runtime.getManifest()?.version ?? '1.0.3'
 
 /** Platform display names */
 const PLATFORM_LABELS: Record<ExportablePlatform, string> = {
@@ -35,11 +42,26 @@ const FREQUENCY_LABELS: Record<ScheduleFrequency, string> = {
   weekly: 'Weekly',
 }
 
-/** Inline SVG Icon */
+/** Inline SVG Icons */
 const SettingsIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
     <circle cx="12" cy="12" r="3"></circle>
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82V9a1.65 1.65 0 0 0 1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+  </svg>
+)
+
+/** Sun icon (light mode) */
+const SunIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="4"></circle>
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+  </svg>
+)
+
+/** Moon icon (dark mode) */
+const MoonIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
   </svg>
 )
 
@@ -54,11 +76,24 @@ export default function Options() {
   )
   const [scheduleStatus, setScheduleStatus] = useState<ScheduledExportStatus | null>(null)
 
+  const locale: Locale = settings.locale ?? 'en'
+  const T = (key: string) => t(key, locale)
+
   // Load settings on mount
   useEffect(() => {
     loadSettings()
     loadScheduleSettings()
   }, [])
+
+  // Synchronize HTML data-theme attribute with theme setting
+  useEffect(() => {
+    if (settings.theme) {
+      document.documentElement.setAttribute('data-theme', settings.theme)
+    } else {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light')
+    }
+  }, [settings.theme])
 
   // Poll status periodically
   useEffect(() => {
@@ -80,7 +115,6 @@ export default function Options() {
     try {
       const result = await chrome.storage.local.get('settings')
       if (result.settings) {
-        // Merge with defaults for any new fields
         setSettings({ ...DEFAULT_SETTINGS, ...result.settings })
       }
     } catch (err) {
@@ -178,185 +212,204 @@ export default function Options() {
 
   return (
     <div className="options-container">
-      <h1 style={{ fontSize: '24px', fontWeight: 600, marginBottom: '32px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-        <SettingsIcon /> Settings
-      </h1>
+      <header className="options-hero">
+        <div className="options-hero-title">
+          <p className="options-kicker">{T('Extension Settings')}</p>
+          <h1>
+            <SettingsIcon /> AI Chat Exporter
+          </h1>
+        </div>
+        <div className="options-hero-actions">
+          <button
+            className="btn-icon"
+            onClick={() => updateSetting('theme', settings.theme === 'dark' ? 'light' : 'dark')}
+            title={T('Toggle Theme')}
+            aria-label={T('Toggle Theme')}
+          >
+            {settings.theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+          </button>
+          <span className="options-version">v{APP_VERSION}</span>
+        </div>
+      </header>
 
-      {/* Export Configuration */}
-      <div className="options-section">
-        <h2>Export Configuration</h2>
+      {/* CARD 1: General & Appearance */}
+      <div className="options-card general-card">
+        <div className="options-card-header">
+          <h2>{T('General & Appearance')}</h2>
+        </div>
         
         <div className="options-row">
-          <span className="option-label">Default Format</span>
+          <div>
+            <div className="option-label">{T('Default Format')}</div>
+            <div className="option-description">{T('Primary format used for one-click exports')}</div>
+          </div>
           <select 
-            className="input" 
-            style={{ width: '150px' }}
+            className="input options-select" 
             value={settings.defaultFormat}
             onChange={(e) => updateSetting('defaultFormat', e.target.value as ExportFormat)}
+            aria-label={T('Default Format')}
           >
-            <option value="pdf">PDF Document</option>
-            <option value="markdown">Markdown File</option>
+            <option value="markdown">{T('Markdown (.md)')}</option>
+            <option value="pdf">{T('PDF Document')}</option>
           </select>
         </div>
 
         <div className="options-row">
           <div>
-            <div className="option-label">Include Metadata</div>
-            <div className="option-description">Add date, title, and platform at the top of the file</div>
-          </div>
-          <input 
-            type="checkbox" 
-            className="toggle" 
-            checked={settings.includeMetadata}
-            onChange={(e) => updateSetting('includeMetadata', e.target.checked)}
-          />
-        </div>
-
-        <div className="options-row">
-          <div>
-            <div className="option-label">Include Code Blocks</div>
-            <div className="option-description">Export syntax-highlighted code blocks</div>
-          </div>
-          <input 
-            type="checkbox" 
-            className="toggle" 
-            checked={settings.includeCodeBlocks}
-            onChange={(e) => updateSetting('includeCodeBlocks', e.target.checked)}
-          />
-        </div>
-
-        <div className="options-row">
-          <div>
-            <div className="option-label">Include Images</div>
-            <div className="option-description">Download and embed images generated in chat</div>
-          </div>
-          <input 
-            type="checkbox" 
-            className="toggle" 
-            checked={settings.includeImages}
-            onChange={(e) => updateSetting('includeImages', e.target.checked)}
-          />
-        </div>
-
-        <div className="options-row">
-          <div>
-            <div className="option-label">Download Folder</div>
-            <div className="option-description">Organize exports into subfolders</div>
+            <div className="option-label">{T('Language')}</div>
+            <div className="option-description">{T('Select UI language')}</div>
           </div>
           <select 
-            className="input" 
-            style={{ width: '150px' }}
-            value={settings.downloadFolder}
-            onChange={(e) => updateSetting('downloadFolder', e.target.value as DownloadFolderOption)}
+            className="input options-select" 
+            value={settings.locale ?? 'en'}
+            onChange={(e) => updateSetting('locale', e.target.value as Locale)}
+            aria-label={T('Language')}
           >
-            <option value="default">Default (no folder)</option>
-            <option value="by-platform">By Platform</option>
-            <option value="custom">Custom Folder</option>
+            <option value="en">{T('English')}</option>
+            <option value="zh-CN">{T('简体中文')}</option>
+            <option value="zh-TW">{T('繁體中文')}</option>
           </select>
         </div>
+      </div>
 
-        {settings.downloadFolder === 'custom' && (
-          <div className="options-row">
-            <div>
-              <div className="option-label">Custom Folder Name</div>
-              <div className="option-description">Name of the folder for exports</div>
-            </div>
-            <input 
-              className="input" 
-              style={{ width: '150px' }} 
-              value={settings.customFolderName}
-              onChange={(e) => updateSetting('customFolderName', e.target.value)}
-              placeholder="AI Chat Exports"
-            />
-          </div>
-        )}
-
-        <div className="options-row">
-          <div>
-            <div className="option-label">Export Artifacts</div>
-            <div className="option-description">Save code artifacts and documents as separate files</div>
-          </div>
-          <input 
-            type="checkbox" 
-            className="toggle" 
-            checked={settings.exportArtifacts}
-            onChange={(e) => updateSetting('exportArtifacts', e.target.checked)}
-          />
+      {/* CARD 2: Export Content Configuration */}
+      <div className="options-card content-card">
+        <div className="options-card-header">
+          <h2>{T('Export Content Configuration')}</h2>
         </div>
 
-        <div className="options-row">
-          <div>
-            <div className="option-label">Include Uploaded Files</div>
-            <div className="option-description">Include references to uploaded files in exports</div>
-          </div>
-          <input 
-            type="checkbox" 
-            className="toggle" 
+        <Section title={T('Content Elements')} className="mb-2">
+          <Toggle
+            label={T('Include Metadata')}
+            description={T('Add exporting metadata (date, title, source platform) at the header')}
+            checked={settings.includeMetadata}
+            onChange={(val) => updateSetting('includeMetadata', val)}
+          />
+          
+          <Toggle
+            label={T('Include Code Blocks')}
+            description={T('Export syntax-highlighted code containers inside chats')}
+            checked={settings.includeCodeBlocks}
+            onChange={(val) => updateSetting('includeCodeBlocks', val)}
+          />
+          
+          <Toggle
+            label={T('Include Images')}
+            description={T('Download and embed images rendered in responses')}
+            checked={settings.includeImages}
+            onChange={(val) => updateSetting('includeImages', val)}
+          />
+
+          <Toggle
+            label={T('Include Uploaded Files')}
+            description={T('Preserve links and names of user-uploaded files')}
             checked={settings.includeUploadedFiles}
-            onChange={(e) => updateSetting('includeUploadedFiles', e.target.checked)}
+            onChange={(val) => updateSetting('includeUploadedFiles', val)}
           />
-        </div>
+        </Section>
+
+        <Section title={T('Structure Layout')} className="mt-2">
+          <Toggle
+            label={T('Export Code Artifacts')}
+            description={T('Extract code artifacts or document blocks as structured sections')}
+            checked={settings.exportArtifacts}
+            onChange={(val) => updateSetting('exportArtifacts', val)}
+          />
+        </Section>
       </div>
 
-      {/* Filename Pattern */}
-      <div className="options-section">
-        <h2>Filename Pattern</h2>
-        <div className="flex-col gap-4">
-          <div className="flex items-center gap-4">
-            <input 
-              className="input flex-1" 
-              value={settings.filenamePattern}
-              onChange={(e) => updateSetting('filenamePattern', e.target.value)}
-              placeholder="{date}-{title}"
-            />
-            <button 
-              className="btn btn-outline" 
-              style={{ width: 'auto', whiteSpace: 'nowrap' }}
-              onClick={() => updateSetting('filenamePattern', '{date}-{title}')}
+      {/* CARD 3: Filename Pattern & Storage Location */}
+      <div className="options-card filename-card">
+        <div className="options-card-header">
+          <h2>{T('Filename Pattern & Storage Strategy')}</h2>
+        </div>
+        
+        <div className="flex-col gap-3">
+          <div className="flex-col gap-1">
+            <span className="text-sm font-medium">{T('Filename Pattern')}</span>
+            <div className="flex items-center gap-2">
+              <input 
+                className="input flex-1" 
+                value={settings.filenamePattern}
+                onChange={(e) => updateSetting('filenamePattern', e.target.value)}
+                placeholder="{date}-{title}"
+                aria-label={T('Filename pattern template')}
+              />
+              <button 
+                className="btn btn-outline" 
+                style={{ width: 'auto', whiteSpace: 'nowrap' }}
+                onClick={() => updateSetting('filenamePattern', '{date}-{title}')}
+              >
+                {T('Reset Default')}
+              </button>
+            </div>
+            <div className="filename-preview">
+              <span>{T('Preview')}</span>
+              <code>{previewFilename}.{settings.defaultFormat === 'pdf' ? 'pdf' : 'md'}</code>
+            </div>
+          </div>
+
+          <div className="options-row options-row-divider">
+            <div>
+              <div className="option-label">{T('Download Folder Strategy')}</div>
+              <div className="option-description">{T('Organize downloaded exports into subfolders')}</div>
+            </div>
+            <select 
+              className="input options-select" 
+              value={settings.downloadFolder}
+              onChange={(e) => updateSetting('downloadFolder', e.target.value as DownloadFolderOption)}
+              aria-label={T('Download folder strategy')}
             >
-              Reset Default
-            </button>
+              <option value="default">{T('Default Downloads Folder')}</option>
+              <option value="by-platform">{T('Organize By Platform')}</option>
+              <option value="custom">{T('Use Custom Subfolder')}</option>
+            </select>
           </div>
-          <div className="text-sm p-3" style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', fontFamily: 'monospace' }}>
-            Preview: {previewFilename}.{settings.defaultFormat === 'pdf' ? 'pdf' : 'md'}
-          </div>
+
+          {settings.downloadFolder === 'custom' && (
+            <div className="options-row" style={{ animation: 'fadeIn 200ms ease' }}>
+              <div>
+                <div className="option-label">{T('Custom Subfolder Name')}</div>
+                <div className="option-description">{T('Exports will be placed inside: Downloads/[folder name]')}</div>
+              </div>
+              <input 
+                className="input options-control" 
+                value={settings.customFolderName}
+                onChange={(e) => updateSetting('customFolderName', e.target.value)}
+                placeholder="AI Chat Exports"
+                aria-label={T('Custom folder name')}
+              />
+            </div>
+          )}
         </div>
       </div>
 
-      {/* ────────────────────────────────────────────────────────────── */}
-      {/* Scheduled Export */}
-      {/* ────────────────────────────────────────────────────────────── */}
-      <div className="options-section">
-        <h2>Scheduled Export</h2>
-        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-          Automatically export new conversations from configured platforms. Exports are Markdown-only.
+      {/* CARD 4: Scheduled Auto-Export (Continuous Backup) */}
+      <div className="options-card schedule-card">
+        <div className="options-card-header">
+          <h2>{T('Scheduled Auto-Export')}</h2>
+        </div>
+        <p className="options-card-intro">
+          {T('Silently export new chats automatically from platforms when extension is running in background. Files are saved in Markdown.')}
         </p>
 
-        {/* Global toggle */}
-        <div className="options-row">
-          <div>
-            <div className="option-label">Enable Scheduled Export</div>
-            <div className="option-description">Periodically check platforms and export new conversations</div>
-          </div>
-          <input
-            type="checkbox"
-            className="toggle"
-            checked={scheduleSettings.enabled}
-            onChange={(e) =>
-              saveScheduleSettings({ ...scheduleSettings, enabled: e.target.checked })
-            }
-          />
-        </div>
+        {/* Global Auto-export toggle */}
+        <Toggle
+          label={T('Enable Scheduled Export')}
+          description={T('Enables automated background scans and continuous backup')}
+          checked={scheduleSettings.enabled}
+          onChange={(val) => saveScheduleSettings({ ...scheduleSettings, enabled: val })}
+        />
 
-        {/* Global settings (shown when enabled) */}
         {scheduleSettings.enabled && (
-          <>
-            {/* Request delay */}
+          <div className="schedule-panel">
+            
+            {/* Delay range slider */}
             <div className="options-row">
               <div>
-                <div className="option-label">Request Delay</div>
+                <div className="option-label text-sm">{T('Request Rate Limit Delay')}</div>
                 <div className="option-description">
-                  Delay between conversation exports ({(scheduleSettings.requestDelayMs / 1000).toFixed(0)}s)
+                  {T('Rest interval between background page loads (')}{((scheduleSettings.requestDelayMs / 1000).toFixed(0))}{T('s)')}
                 </div>
               </div>
               <input
@@ -371,20 +424,20 @@ export default function Options() {
                     requestDelayMs: Number(e.target.value),
                   })
                 }
-                style={{ width: '150px' }}
+                className="options-range"
+                aria-label="Request delay range"
               />
             </div>
 
             {/* Max total per run */}
             <div className="options-row">
               <div>
-                <div className="option-label">Max Total Per Run</div>
-                <div className="option-description">Max conversations across all platforms (1–200)</div>
+                <div className="option-label text-sm">{T('Max Conversations Per Run')}</div>
+                <div className="option-description">{T('Cap limit on exports processed in a single run (1–200)')}</div>
               </div>
               <input
                 type="number"
-                className="input"
-                style={{ width: '80px' }}
+                className="input options-number"
                 min={1}
                 max={200}
                 value={scheduleSettings.maxTotalPerRun}
@@ -394,187 +447,187 @@ export default function Options() {
                     maxTotalPerRun: Math.min(200, Math.max(1, Number(e.target.value))),
                   })
                 }
+                aria-label="Max total conversations per run"
               />
             </div>
 
             {/* Close tab after export */}
-            <div className="options-row">
-              <div>
-                <div className="option-label">Close Tab After Export</div>
-                <div className="option-description">Close background tab when export finishes</div>
-              </div>
-              <input
-                type="checkbox"
-                className="toggle"
-                checked={scheduleSettings.closeTabAfterExport}
-                onChange={(e) =>
-                  saveScheduleSettings({
-                    ...scheduleSettings,
-                    closeTabAfterExport: e.target.checked,
-                  })
-                }
-              />
-            </div>
+            <Toggle
+              label={T('Close Tab After Export')}
+              description={T('Automatically close tabs spawned for background fetching')}
+              checked={scheduleSettings.closeTabAfterExport}
+              onChange={(val) =>
+                saveScheduleSettings({
+                  ...scheduleSettings,
+                  closeTabAfterExport: val,
+                })
+              }
+            />
 
             {/* Per-platform cards */}
-            <div style={{ marginTop: '16px' }}>
-              <h3 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '12px' }}>
-                Platform Schedules
-              </h3>
-              {platformKeys.map((platform) => {
-                const pConfig = scheduleSettings.platforms[platform]
-                return (
-                  <div
-                    key={platform}
-                    style={{
-                      border: '1px solid var(--border)',
-                      borderRadius: '8px',
-                      padding: '12px 16px',
-                      marginBottom: '8px',
-                      opacity: pConfig.enabled ? 1 : 0.6,
-                    }}
-                  >
-                    {/* Enable toggle */}
-                    <div className="options-row" style={{ marginBottom: 0 }}>
-                      <span className="option-label" style={{ fontWeight: 600 }}>
-                        {PLATFORM_LABELS[platform]}
-                      </span>
-                      <input
-                        type="checkbox"
-                        className="toggle"
-                        checked={pConfig.enabled}
-                        onChange={(e) => {
-                          const newPlatforms = {
-                            ...scheduleSettings.platforms,
-                            [platform]: { ...pConfig, enabled: e.target.checked },
-                          }
-                          saveScheduleSettings({ ...scheduleSettings, platforms: newPlatforms })
-                        }}
-                      />
-                    </div>
-
-                    {pConfig.enabled && (
-                      <div style={{ marginTop: '8px', display: 'flex', gap: '16px', alignItems: 'center' }}>
-                        {/* Frequency */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Frequency:</span>
-                          <select
-                            className="input"
-                            style={{ width: '130px', padding: '4px 8px', fontSize: '12px' }}
-                            value={pConfig.frequency}
-                            onChange={(e) => {
-                              const newPlatforms = {
-                                ...scheduleSettings.platforms,
-                                [platform]: { ...pConfig, frequency: e.target.value as ScheduleFrequency },
-                              }
-                              saveScheduleSettings({ ...scheduleSettings, platforms: newPlatforms })
-                            }}
-                          >
-                            {Object.entries(FREQUENCY_LABELS).map(([val, label]) => (
-                              <option key={val} value={val}>{label}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        {/* Max per run */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Max:</span>
-                          <input
-                            type="number"
-                            className="input"
-                            style={{ width: '60px', padding: '4px 8px', fontSize: '12px' }}
-                            min={1}
-                            max={100}
-                            value={pConfig.maxPerRun}
-                            onChange={(e) => {
-                              const newPlatforms = {
-                                ...scheduleSettings.platforms,
-                                [platform]: {
-                                  ...pConfig,
-                                  maxPerRun: Math.min(100, Math.max(1, Number(e.target.value))),
-                                },
-                              }
-                              saveScheduleSettings({ ...scheduleSettings, platforms: newPlatforms })
-                            }}
-                          />
-                        </div>
+            <div className="platform-schedule-section">
+              <span className="section-label mb-2 block">{T('Platform Schedule Details')}</span>
+              <div className="platform-grid">
+                {platformKeys.map((platform) => {
+                  const pConfig = scheduleSettings.platforms[platform]
+                  return (
+                    <div
+                      key={platform}
+                      className={`platform-card ${pConfig.enabled ? 'is-enabled' : ''}`}
+                    >
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs font-bold text-primary">
+                          {PLATFORM_LABELS[platform]}
+                        </span>
+                        <input
+                          type="checkbox"
+                          className="toggle"
+                          checked={pConfig.enabled}
+                          onChange={(e) => {
+                            const newPlatforms = {
+                              ...scheduleSettings.platforms,
+                              [platform]: { ...pConfig, enabled: e.target.checked },
+                            }
+                            saveScheduleSettings({ ...scheduleSettings, platforms: newPlatforms })
+                          }}
+                          aria-label={`Enable schedule for ${PLATFORM_LABELS[platform]}`}
+                        />
                       </div>
-                    )}
-                  </div>
-                )
-              })}
+
+                      {pConfig.enabled && (
+                        <div className="platform-controls">
+                          <label>
+                            <span>Frequency</span>
+                            <select
+                              className="select"
+                              value={pConfig.frequency}
+                              onChange={(e) => {
+                                const newPlatforms = {
+                                  ...scheduleSettings.platforms,
+                                  [platform]: { ...pConfig, frequency: e.target.value as ScheduleFrequency },
+                                }
+                                saveScheduleSettings({ ...scheduleSettings, platforms: newPlatforms })
+                              }}
+                              aria-label={`Frequency for ${PLATFORM_LABELS[platform]}`}
+                            >
+                              {Object.entries(FREQUENCY_LABELS).map(([val, label]) => (
+                                <option key={val} value={val}>{label}</option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label>
+                            <span>Max</span>
+                            <input
+                              type="number"
+                              className="input"
+                              min={1}
+                              max={100}
+                              value={pConfig.maxPerRun}
+                              onChange={(e) => {
+                                const newPlatforms = {
+                                  ...scheduleSettings.platforms,
+                                  [platform]: {
+                                    ...pConfig,
+                                    maxPerRun: Math.min(100, Math.max(1, Number(e.target.value))),
+                                  },
+                                }
+                                saveScheduleSettings({ ...scheduleSettings, platforms: newPlatforms })
+                              }}
+                              aria-label={`Max limit for ${PLATFORM_LABELS[platform]}`}
+                            />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-          </>
+          </div>
         )}
 
-        {/* Status display */}
-        <div style={{ marginTop: '16px', padding: '12px 16px', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
-            Export Status
-          </div>
+        {/* Scheduled Export Status and History panel */}
+        <div className="status-panel">
+          <span className="section-label mb-2 block">{T('Background Task Status')}</span>
 
           {scheduleStatus?.isRunning ? (
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              <span style={{ color: 'var(--accent, #4285f4)', fontWeight: 600 }}>⟳ Running...</span>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span className="spinner" style={{ borderTopColor: 'var(--primary)', width: '12px', height: '12px' }}></span>
+              <span style={{ color: 'var(--primary)', fontWeight: 600 }}>{T('Running Auto-Export...')}</span>
               {scheduleStatus.currentPlatform && (
-                <span> — {PLATFORM_LABELS[scheduleStatus.currentPlatform]}</span>
+                <span className="badge" style={{ textTransform: 'capitalize' }}>{PLATFORM_LABELS[scheduleStatus.currentPlatform]}</span>
               )}
             </div>
           ) : scheduleStatus?.lastRunAt ? (
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              Last run: {new Date(scheduleStatus.lastRunAt).toLocaleString()}
-              {scheduleStatus.lastRunExported > 0 && (
-                <span> — Exported {scheduleStatus.lastRunExported}</span>
-              )}
-              {scheduleStatus.lastRunFailed > 0 && (
-                <span>, {scheduleStatus.lastRunFailed} failed</span>
-              )}
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+              <div><strong>Last active:</strong> {new Date(scheduleStatus.lastRunAt).toLocaleString()}</div>
+              <div style={{ marginTop: '2px' }}>
+                <span>Exported: <strong style={{ color: 'var(--success)' }}>{scheduleStatus.lastRunExported}</strong></span>
+                {scheduleStatus.lastRunFailed > 0 && (
+                  <span style={{ marginLeft: '10px' }}>Failed: <strong style={{ color: 'var(--error)' }}>{scheduleStatus.lastRunFailed}</strong></span>
+                )}
+              </div>
               {scheduleStatus.lastRunError && (
-                <div style={{ color: 'var(--error, #ea4335)', marginTop: '4px' }}>
-                  Error: {scheduleStatus.lastRunError}
+                <div style={{ color: 'var(--error)', marginTop: '4px' }}>
+                  <strong>Error:</strong> {scheduleStatus.lastRunError}
                 </div>
               )}
             </div>
           ) : (
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              No exports yet
+            <div style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
+              {T('No background exports completed yet.')}
             </div>
           )}
 
           {/* Action buttons */}
-          <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+          <div className="status-actions">
             <button
-              className="btn btn-outline"
-              style={{ width: 'auto', fontSize: '12px', padding: '6px 12px' }}
+              className="btn btn-outline btn-compact"
               onClick={triggerScheduledExport}
               disabled={scheduleStatus?.isRunning}
             >
-              Run Now
+              {T('Trigger Run Now')}
             </button>
             <button
-              className="btn btn-outline"
-              style={{ width: 'auto', fontSize: '12px', padding: '6px 12px' }}
+              className="btn btn-outline btn-compact"
               onClick={clearExportHistory}
             >
-              Clear History
+              {T('Clear Logs & History')}
             </button>
           </div>
         </div>
       </div>
 
-      {/* About */}
-      <div className="options-section">
-        <h2>About</h2>
-        <div className="flex-col gap-2 text-sm">
-          <div className="font-medium" style={{ color: 'var(--text-primary)' }}>AI Chat Exporter v1.0.0</div>
-          <div style={{ color: 'var(--text-secondary)' }}>MIT License &bull; Open Source</div>
-          <div style={{ color: 'var(--text-secondary)' }}>GitHub: pinguarmy/ai-chat-exporter</div>
+      {/* CARD 5: About & License */}
+      <div className="options-card about-card">
+        <div className="options-card-header">
+          <h2>{T('About')}</h2>
+        </div>
+        <div className="flex justify-between items-center text-sm">
+          <div className="flex-col gap-1">
+            <div className="font-bold" style={{ color: 'var(--text-primary)' }}>AI Chat Exporter <span className="text-xs text-muted" style={{ fontWeight: 'normal' }}>v{APP_VERSION}</span></div>
+            <div className="text-xs text-muted">MIT License &bull; Free and Open Source Software</div>
+          </div>
+          <a 
+            href="https://github.com/pinguarmy/ai-chat-exporter" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="github-chip"
+            style={{ padding: '6px 12px', fontSize: '11px' }}
+            title="Visit GitHub repository"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
+              <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+            </svg>
+            github.com/pinguarmy/ai-chat-exporter
+          </a>
         </div>
       </div>
 
       {saved && (
-        <div className="save-notification">
-          Settings saved!
+        <div className="save-notification" role="status" aria-live="polite">
+          {T('Settings saved successfully!')}
         </div>
       )}
     </div>
