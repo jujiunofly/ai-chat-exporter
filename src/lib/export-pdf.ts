@@ -53,6 +53,8 @@ export function conversationToHtml(
       ${conversation.messages.map(msg => generateMessageHtml(msg, options)).join('\n')}
     </div>
     
+    ${options.exportArtifacts ? generateArtifactsHtml(conversation, options) : ''}
+    
     <footer>
       <hr>
       <p>Exported from ${platform} on ${new Date().toLocaleDateString()}</p>
@@ -127,6 +129,47 @@ function generateMessageHtml(message: ChatMessage, options: ExportOptions): stri
   }
   
   return `\n    <div class="message ${roleClass}" style="page-break-inside: avoid;">\n      <div class="role">${roleLabel}${authorInfo}</div>\n      ${content}\n    </div>`
+}
+
+/**
+ * Generate an "Artifacts" HTML section for PDF export (mirrors the markdown
+ * "## Artifacts" block). Lists AI-generated artifacts and research-doc URLs
+ * that parsers attached to `conversation.artifacts` or to individual messages.
+ * User-uploaded document artifacts honor `includeUploadedFiles`.
+ */
+function generateArtifactsHtml(conversation: Conversation, options: ExportOptions): string {
+  const refs: { name: string; url: string }[] = []
+  const seen = new Set<string>()
+  const add = (name: string, url: string) => {
+    if (url && !seen.has(url)) {
+      seen.add(url)
+      refs.push({ name: name || url, url })
+    }
+  }
+
+  for (const art of conversation.artifacts || []) {
+    const isUploadedFile = art.type === 'document' && !art.content
+    if (isUploadedFile && options.includeUploadedFiles === false) continue
+    const url = (art as any).url
+    if (url) add(art.title || art.type, url)
+  }
+
+  for (const message of conversation.messages) {
+    for (const att of message.attachments || []) {
+      if (att.url && att.type !== 'image') add(att.name || att.url, att.url)
+    }
+  }
+
+  if (refs.length === 0) return ''
+
+  const items = refs.map(ref => {
+    const name = escapeHtml(ref.name)
+    // Only allow http(s)/mailto link targets (block javascript:/data:).
+    const safe = /^(https?:|mailto:)/i.test(ref.url.trim()) ? ref.url.trim() : '#'
+    return `<li><a href="${escapeHtml(safe)}">${name}</a></li>`
+  }).join('\n')
+
+  return `\n    <div class="artifacts">\n      <h2>Artifacts</h2>\n      <p><em>AI-generated artifacts and research documents referenced in this conversation:</em></p>\n      <ul>\n${items}\n      </ul>\n    </div>`
 }
 
 /**

@@ -165,6 +165,55 @@ describe('Export PDF', () => {
       expect(html).toContain('src="https://example.com/image.png"')
     })
 
+    describe('Artifacts section (exportArtifacts) — mirrors markdown', () => {
+      it('renders an Artifacts block from conversation.artifacts when exportArtifacts is on', () => {
+        const conv = createConversation({
+          artifacts: [
+            { type: 'html', title: 'Page', content: '<html></html>', url: 'https://safe.example/a.html' }
+          ]
+        })
+        const html = conversationToHtml(conv, { ...defaultOptions, exportArtifacts: true })
+        expect(html).toContain('<h2>Artifacts</h2>')
+        expect(html).toContain('https://safe.example/a.html')
+      })
+
+      it('omits the Artifacts block when exportArtifacts is off', () => {
+        const conv = createConversation({
+          artifacts: [
+            { type: 'html', title: 'Page', content: '<html></html>', url: 'https://safe.example/a.html' }
+          ]
+        })
+        const html = conversationToHtml(conv, { ...defaultOptions, exportArtifacts: false })
+        expect(html).not.toContain('<h2>Artifacts</h2>')
+      })
+
+      it('blocks non-http(s)/mailto artifact urls (no javascript: link target)', () => {
+        const conv = createConversation({
+          artifacts: [
+            { type: 'html', title: '[click me](javascript:alert(1))', content: 'x', url: 'javascript:alert(1)' }
+          ]
+        })
+        const html = conversationToHtml(conv, { ...defaultOptions, exportArtifacts: true })
+        // The link TARGET must never be the javascript: url — it is sanitized to '#'.
+        expect(html).not.toContain('href="javascript:alert(1)"')
+        expect(html).toContain('href="#"')
+        // The malicious title is rendered as inert escaped text, not as a live link.
+        expect(html).toContain('click me')
+      })
+
+      it('drops user-uploaded document artifacts when includeUploadedFiles is off', () => {
+        const conv = createConversation({
+          artifacts: [
+            { type: 'html', title: 'Page', content: '<html></html>', url: 'https://safe.example/a.html' },
+            { type: 'document', title: 'my-upload.pdf', content: '', url: 'https://files.example/my-upload.pdf' }
+          ]
+        })
+        const html = conversationToHtml(conv, { ...defaultOptions, exportArtifacts: true, includeUploadedFiles: false })
+        expect(html).toContain('https://safe.example/a.html')
+        expect(html).not.toContain('my-upload.pdf')
+      })
+    })
+
     it('should escape HTML in content', () => {
       const conv = createConversation({
         messages: [
