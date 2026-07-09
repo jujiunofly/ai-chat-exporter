@@ -1,4 +1,4 @@
-# Chrome Web Store Listing — AI Chat Exporter v1.1.0 (Final)
+# Chrome Web Store Listing — AI Chat Exporter v1.1.1 (Final)
 
 ## Extension Name
 ```
@@ -127,7 +127,7 @@ Built by pinguarmy.
 ## What's New (update log field)
 
 ```
-v1.1.0 — Major update:
+v1.1.1 — Major update:
 
 🌙 Dark/Light theme toggle with system preference detection
 🌐 Full 3-language UI: English, 简体中文, 繁體中文
