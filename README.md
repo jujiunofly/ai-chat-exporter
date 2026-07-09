@@ -8,13 +8,13 @@
 [![Firefox Add-on](https://img.shields.io/badge/Firefox-Add--on-orange?logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/en-US/firefox/addon/pinguarmy-ai-chat-exporter/)
 [![Edge Extension](https://img.shields.io/badge/Edge-Extension-blue?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/ai-chat-exporter/ndjcmigocoflghenpchbldpkaccechpg)
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-438%20passing-brightgreen)](https://github.com/pinguarmy/ai-chat-exporter/actions)
+[![Tests](https://img.shields.io/badge/Tests-492%20passing-brightgreen)](https://github.com/pinguarmy/ai-chat-exporter/actions)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Plasmo](https://img.shields.io/badge/Built_with-Plasmo-purple.svg)](https://plasmo.com)
 
 <br/>
 
-One-click export. Bulk download. Custom filenames. Beautiful output.
+Built by [pinguarmy](https://github.com/pinguarmy). One-click export. Bulk download. Custom filenames. Beautiful output.
 
 [Install](#installation) · [Features](#features) · [Usage](#usage) · [Development](#development)
 
@@ -47,7 +47,7 @@ Export any conversation to **PDF** or **Markdown** with proper formatting, code 
 | **Organized Folders** | Auto-sort exports into `ChatGPT/`, `Gemini/`, `Claude/`, `DeepSeek/`, or `Grok/` subfolders |
 | **LaTeX Support** | Mathematical equations preserved as-is in Markdown, rendered in PDF |
 | **Unicode Filenames** | Chinese, Japanese, Korean, Arabic titles preserved in filenames |
-| **Zero Tracking** | No analytics, no accounts, no data leaves your browser |
+| **Zero Tracking** | No analytics, no extension accounts, and no export data sent to third-party servers |
 | **Open Source** | MIT licensed — inspect, fork, and contribute |
 
 ## Installation
@@ -160,7 +160,7 @@ npm install
 # Development mode (watch + hot reload)
 npx plasmo dev
 
-# Run tests (438 tests)
+# Run tests (492 tests)
 npm test
 
 # Production build (creates Chrome/Edge + Firefox ZIPs)
@@ -192,7 +192,7 @@ ai-chat-exporter/
 │   ├── components/            # React UI components
 │   ├── styles/                # CSS (Gemini design system)
 │   └── tabs/                  # Preview page
-├── tests/                     # 438 tests (Vitest + jsdom)
+├── tests/                     # 492 tests (Vitest + jsdom)
 ├── scripts/
 │   ├── build-all.sh           # Build for Chrome/Edge + Firefox
 │   └── patch-firefox-manifest.js  # Firefox MV3 compatibility
@@ -206,7 +206,7 @@ ai-chat-exporter/
 ### Testing
 
 ```bash
-npm test                # Run all 438 tests
+npm test                # Run all 492 tests
 npx vitest run          # Same
 npx vitest watch        # Watch mode
 ```
@@ -243,7 +243,7 @@ Contributions welcome! Here's how:
 This extension:
 
 - ✅ Runs entirely in your browser
-- ✅ Sends NO data to any server
+- ✅ Sends export data only to the AI platforms you are already using when needed for export
 - ✅ Uses NO analytics or tracking
 - ✅ Stores settings locally in chrome.storage
 - ✅ Source code is fully auditable
@@ -264,8 +264,8 @@ Privacy policy: https://pinguarmy.github.io/ai-chat-exporter/PRIVACY.md
 
 <div align="center">
 
-**Made with ❤️ by [pinguarmy](https://github.com/pinguarmy)**
+Built and maintained by [pinguarmy](https://github.com/pinguarmy).
 
-If this saved you time, give it a ⭐ — it helps others find it.
+If this saved you time, a GitHub star helps others find it.
 
 </div>

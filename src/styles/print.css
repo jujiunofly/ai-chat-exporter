@@ -2,6 +2,11 @@
  * Print & Preview Styles — Gemini-inspired design system
  */
 
+html {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 /* Override popup.css body width for full-page preview */
 body {
   width: auto !important;
@@ -10,6 +15,7 @@ body {
   min-height: 100vh;
   background: var(--bg-secondary);
   overflow-x: hidden;
+  overflow-y: auto;
 }
 
 /* ===== Preview Container ===== */

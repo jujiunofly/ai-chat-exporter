@@ -9,12 +9,12 @@ to PDF and Markdown files. All processing happens locally in your browser.
 
 ## Data Collection
 
-**We do not collect, transmit, or store any of your data on external servers.**
+**We do not collect, sell, or store any of your data on extension-operated servers.**
 
 The extension accesses the following data solely to perform exports:
 
 - **Conversation content**: The text, code blocks, and metadata of conversations you choose to export from ChatGPT, Gemini, Claude, DeepSeek, and Grok.
-- **Authentication tokens**: Session tokens from AI platforms (stored locally) to access conversation APIs for bulk export. These tokens are never transmitted to any third party.
+- **Authentication tokens**: Session tokens from AI platforms (stored locally) to access conversation APIs for user-initiated exports. These tokens are used only with the platform you are already signed in to and are never sent to extension-operated servers.
 - **User preferences**: Your export settings (filename format, download folder, format preferences) stored in your browser's local storage.
 
 ## Data Storage
@@ -26,7 +26,7 @@ All data is stored locally in your browser using the `chrome.storage` API:
 
 ## Data Transmission
 
-The extension makes network requests ONLY to the AI platform APIs you are already authenticated to:
+The extension makes network requests only to the AI platform APIs you are already authenticated to, and only to perform export actions you request:
 
 - `chatgpt.com` / `chat.openai.com`
 - `gemini.google.com`
@@ -34,7 +34,7 @@ The extension makes network requests ONLY to the AI platform APIs you are alread
 - `deepseek.com` / `chat.deepseek.com`
 - `grok.com` / `www.grok.com`
 
-No data is sent to any other servers. No analytics, telemetry, or tracking.
+No export data is sent to extension-operated servers. No analytics, telemetry, or tracking.
 
 ## Third-Party Services
 

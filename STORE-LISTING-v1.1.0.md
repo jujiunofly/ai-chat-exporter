@@ -2,21 +2,21 @@
 
 ## Extension Name
 ```
-AI Chat Exporter: Free, No Limits
+AI Chat Exporter
 ```
 
 ## Short Description (132 chars max)
 ```
-Export ChatGPT, Gemini, Claude, DeepSeek & Grok to PDF/Markdown. Unlimited exports, no daily caps. Completely free, forever.
+Export ChatGPT, Gemini, Claude, DeepSeek & Grok conversations to clean PDF or Markdown files.
 ```
-(124 chars ✓)
+(92 chars ✓)
 
 ## Detailed Description
 
 ```
-AI Chat Exporter — Completely Free. No Limits. Forever.
+AI Chat Exporter helps you save AI conversations from ChatGPT, Gemini, Claude, DeepSeek, and Grok as clean PDF or Markdown files.
 
-Unlike other export extensions that cap you at 3-5 conversations per day and then ask you to pay, AI Chat Exporter gives you unlimited exports with zero paywalls. Export 10 conversations or 10,000. Same experience. Same quality. Free.
+Use it for personal archives, research notes, coding sessions, class materials, and long-running projects you want to keep outside a single chat platform.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -102,7 +102,8 @@ The extension uses the platform's own API to fetch complete conversations, not j
 PRIVACY & SECURITY
 • No data collection — your conversations never leave your browser
 • No analytics or tracking — zero telemetry
-• No external servers — all processing happens locally
+• No extension-operated servers — export processing happens locally
+• Platform API requests are made only to the AI services you are already using
 • No accounts or sign-ups required
 • Open source — audit the code yourself on GitHub
 • Minimal permissions — only what's needed to export
@@ -114,11 +115,7 @@ This extension is fully open source under the MIT license.
 Source code: https://github.com/pinguarmy/ai-chat-exporter
 Report issues: https://github.com/pinguarmy/ai-chat-exporter/issues
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Built by students who got tired of paying to export their own conversations.
-
-Love, PinguArmy 🐧
+Built by pinguarmy.
 ```
 
 ## What's New (update log field)
@@ -126,11 +123,10 @@ Love, PinguArmy 🐧
 ```
 v1.1.0 — Major update:
 
-✅ Completely free, unlimited exports (no daily caps, no paywall)
 🌙 Dark/Light theme toggle with system preference detection
 🌐 Full 3-language UI: English, 简体中文, 繁體中文
 🎨 Redesigned settings page with modern card layout
 ⚡ Bulk export now has advanced options
 ♿ Accessibility: keyboard focus indicators, WCAG AA contrast
-🔧 Bug fixes: ChatGPT parser, timestamps, preview layout
+🔧 Bug fixes: ChatGPT parser, timestamps, preview/settings scrolling
 ```

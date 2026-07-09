@@ -256,6 +256,22 @@ export default function Options() {
 
         <div className="options-row">
           <div>
+            <div className="option-label">{T('UI Theme')}</div>
+            <div className="option-description">{T('Select color theme for extension popup and options')}</div>
+          </div>
+          <select
+            className="input options-select"
+            value={settings.theme}
+            onChange={(e) => updateSetting('theme', e.target.value as ExtensionSettings['theme'])}
+            aria-label={T('UI Theme')}
+          >
+            <option value="light">{T('Light Mode')}</option>
+            <option value="dark">{T('Dark Mode')}</option>
+          </select>
+        </div>
+
+        <div className="options-row">
+          <div>
             <div className="option-label">{T('Language')}</div>
             <div className="option-description">{T('Select UI language')}</div>
           </div>
@@ -270,6 +286,39 @@ export default function Options() {
             <option value="zh-TW">{T('繁體中文')}</option>
           </select>
         </div>
+
+        <div className="options-row options-row-divider">
+          <div>
+            <div className="option-label">{T('Download Folder Strategy')}</div>
+            <div className="option-description">{T('Organize downloaded exports into subfolders')}</div>
+          </div>
+          <select
+            className="input options-select"
+            value={settings.downloadFolder}
+            onChange={(e) => updateSetting('downloadFolder', e.target.value as DownloadFolderOption)}
+            aria-label={T('Download folder strategy')}
+          >
+            <option value="default">{T('Default Downloads Folder')}</option>
+            <option value="by-platform">{T('Organize By Platform')}</option>
+            <option value="custom">{T('Use Custom Subfolder')}</option>
+          </select>
+        </div>
+
+        {settings.downloadFolder === 'custom' && (
+          <div className="options-row" style={{ animation: 'fadeIn 200ms ease' }}>
+            <div>
+              <div className="option-label">{T('Custom Subfolder Name')}</div>
+              <div className="option-description">{T('Exports will be placed inside: Downloads/[folder name]')}</div>
+            </div>
+            <input
+              className="input options-control"
+              value={settings.customFolderName}
+              onChange={(e) => updateSetting('customFolderName', e.target.value)}
+              placeholder="AI Chat Exports"
+              aria-label={T('Custom folder name')}
+            />
+          </div>
+        )}
       </div>
 
       {/* CARD 2: Export Content Configuration */}
@@ -318,10 +367,10 @@ export default function Options() {
         </Section>
       </div>
 
-      {/* CARD 3: Filename Pattern & Storage Location */}
+      {/* CARD 3: Filename Pattern */}
       <div className="options-card filename-card">
         <div className="options-card-header">
-          <h2>{T('Filename Pattern & Storage Strategy')}</h2>
+          <h2>{T('Filename Pattern')}</h2>
         </div>
         
         <div className="flex-col gap-3">
@@ -348,39 +397,6 @@ export default function Options() {
               <code>{previewFilename}.{settings.defaultFormat === 'pdf' ? 'pdf' : 'md'}</code>
             </div>
           </div>
-
-          <div className="options-row options-row-divider">
-            <div>
-              <div className="option-label">{T('Download Folder Strategy')}</div>
-              <div className="option-description">{T('Organize downloaded exports into subfolders')}</div>
-            </div>
-            <select 
-              className="input options-select" 
-              value={settings.downloadFolder}
-              onChange={(e) => updateSetting('downloadFolder', e.target.value as DownloadFolderOption)}
-              aria-label={T('Download folder strategy')}
-            >
-              <option value="default">{T('Default Downloads Folder')}</option>
-              <option value="by-platform">{T('Organize By Platform')}</option>
-              <option value="custom">{T('Use Custom Subfolder')}</option>
-            </select>
-          </div>
-
-          {settings.downloadFolder === 'custom' && (
-            <div className="options-row" style={{ animation: 'fadeIn 200ms ease' }}>
-              <div>
-                <div className="option-label">{T('Custom Subfolder Name')}</div>
-                <div className="option-description">{T('Exports will be placed inside: Downloads/[folder name]')}</div>
-              </div>
-              <input 
-                className="input options-control" 
-                value={settings.customFolderName}
-                onChange={(e) => updateSetting('customFolderName', e.target.value)}
-                placeholder="AI Chat Exports"
-                aria-label={T('Custom folder name')}
-              />
-            </div>
-          )}
         </div>
       </div>
 

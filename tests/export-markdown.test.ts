@@ -327,7 +327,7 @@ describe('Export Markdown', () => {
     })
   })
 
-  describe('Artifacts section (exportArtifacts) — independent review review fixes', () => {
+  describe('Artifacts section (exportArtifacts) regression coverage', () => {
     it('emits the "## Artifacts" section from conversation.artifacts (real store, item B)', () => {
       const conv = createConversation({
         artifacts: [
@@ -389,7 +389,7 @@ describe('Export Markdown', () => {
     })
   })
 
-  describe('includeUploadedFiles toggle — independent review review fix', () => {
+  describe('includeUploadedFiles toggle regression coverage', () => {
     const convWithUpload = createConversation({
       messages: [
         {

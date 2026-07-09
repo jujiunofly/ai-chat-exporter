@@ -41,3 +41,17 @@ build/
 ai-chat-exporter.zip
 ai-chat-exporter-source.zip
 ai-chat-exporter-firefox.zip
+
+# Private working notes and generated launch assets
+HANDOFF*.md
+REVIEW-STATUS-*.md
+WORKPLAN-*.md
+*-PROMPT.md
+independent review-*.py
+independent review-*.txt
+promo-gen-input/
+assets/store-assets/
+assets/store-assets-final/
+screenshots/options-*.png
+screenshots/popup-*.png
+screenshots/preview-*.png
