@@ -7,14 +7,16 @@ AI Chat Exporter
 
 ## Short Description (132 chars max)
 ```
-Export ChatGPT, Gemini, Claude, DeepSeek & Grok conversations to clean PDF or Markdown files.
+Free AI chat export for ChatGPT, Gemini, Claude, DeepSeek & Grok. Save clean PDF/Markdown. No accounts.
 ```
-(92 chars ✓)
+(105 chars ✓)
 
 ## Detailed Description
 
 ```
-AI Chat Exporter helps you save AI conversations from ChatGPT, Gemini, Claude, DeepSeek, and Grok as clean PDF or Markdown files.
+AI Chat Exporter is the free, open-source way to save your AI conversations from ChatGPT, Gemini, Claude, DeepSeek, and Grok as clean PDF or Markdown files.
+
+No paywalls. No subscriptions. No extension accounts. No analytics. Your conversations stay under your control.
 
 Use it for personal archives, research notes, coding sessions, class materials, and long-running projects you want to keep outside a single chat platform.
 
@@ -30,6 +32,9 @@ SUPPORTED PLATFORMS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 KEY FEATURES
+
+✅ 100% Free & Open Source
+Export your AI chats without paid tiers, subscription prompts, or account creation. The code is public and MIT licensed.
 
 🚀 One-Click Export
 Export the conversation you're currently viewing to PDF or Markdown instantly. No copy-pasting, no formatting lost.
@@ -100,6 +105,7 @@ The extension uses the platform's own API to fetch complete conversations, not j
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 PRIVACY & SECURITY
+• 100% free — no paid export caps, subscriptions, or extension accounts
 • No data collection — your conversations never leave your browser
 • No analytics or tracking — zero telemetry
 • No extension-operated servers — export processing happens locally

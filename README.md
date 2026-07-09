@@ -2,19 +2,19 @@
 
 # AI Chat Exporter
 
-**Export your ChatGPT, Gemini, Claude, DeepSeek & Grok conversations to beautifully formatted files.**
+**Export ChatGPT, Gemini, Claude, DeepSeek & Grok to clean PDF or Markdown. 100% free. No paywalls. No accounts. No tracking.**
 
 [![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/ai-chat-exporter/kdafdajkiljhghecdkeogldafhjgmgpk)
 [![Firefox Add-on](https://img.shields.io/badge/Firefox-Add--on-orange?logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/en-US/firefox/addon/pinguarmy-ai-chat-exporter/)
 [![Edge Extension](https://img.shields.io/badge/Edge-Extension-blue?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/ai-chat-exporter/ndjcmigocoflghenpchbldpkaccechpg)
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-492%20passing-brightgreen)](https://github.com/pinguarmy/ai-chat-exporter/actions)
+[![Tests](https://img.shields.io/badge/Tests-495%20passing-brightgreen)](https://github.com/pinguarmy/ai-chat-exporter/actions)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Plasmo](https://img.shields.io/badge/Built_with-Plasmo-purple.svg)](https://plasmo.com)
 
 <br/>
 
-Built by [pinguarmy](https://github.com/pinguarmy). One-click export. Bulk download. Custom filenames. Beautiful output.
+Built by [pinguarmy](https://github.com/pinguarmy). Free forever. One-click export. Bulk download. Custom filenames. Beautiful output.
 
 [Install](#installation) · [Features](#features) · [Usage](#usage) · [Development](#development)
 
@@ -24,7 +24,7 @@ Built by [pinguarmy](https://github.com/pinguarmy). One-click export. Bulk downl
 
 ## Why?
 
-ChatGPT, Gemini, Claude, DeepSeek, and Grok don't let you export your conversations in a clean, portable format. Your conversations are trapped inside their platforms. **AI Chat Exporter** fixes that.
+ChatGPT, Gemini, Claude, DeepSeek, and Grok don't let you export your conversations in a clean, portable format. Your conversations are trapped inside their platforms. **AI Chat Exporter** fixes that, for free.
 
 Export any conversation to **PDF** or **Markdown** with proper formatting, code blocks, LaTeX equations, images, and metadata. Perfect for:
 
@@ -47,6 +47,7 @@ Export any conversation to **PDF** or **Markdown** with proper formatting, code 
 | **Organized Folders** | Auto-sort exports into `ChatGPT/`, `Gemini/`, `Claude/`, `DeepSeek/`, or `Grok/` subfolders |
 | **LaTeX Support** | Mathematical equations preserved as-is in Markdown, rendered in PDF |
 | **Unicode Filenames** | Chinese, Japanese, Korean, Arabic titles preserved in filenames |
+| **Free Forever** | No paywalls, no subscriptions, no extension accounts, and no paid export caps |
 | **Zero Tracking** | No analytics, no extension accounts, and no export data sent to third-party servers |
 | **Open Source** | MIT licensed — inspect, fork, and contribute |
 
@@ -160,7 +161,7 @@ npm install
 # Development mode (watch + hot reload)
 npx plasmo dev
 
-# Run tests (492 tests)
+# Run tests
 npm test
 
 # Production build (creates Chrome/Edge + Firefox ZIPs)
@@ -192,7 +193,7 @@ ai-chat-exporter/
 │   ├── components/            # React UI components
 │   ├── styles/                # CSS (Gemini design system)
 │   └── tabs/                  # Preview page
-├── tests/                     # 492 tests (Vitest + jsdom)
+├── tests/                     # Vitest + jsdom test suite
 ├── scripts/
 │   ├── build-all.sh           # Build for Chrome/Edge + Firefox
 │   └── patch-firefox-manifest.js  # Firefox MV3 compatibility
@@ -206,7 +207,7 @@ ai-chat-exporter/
 ### Testing
 
 ```bash
-npm test                # Run all 492 tests
+npm test                # Run the full test suite
 npx vitest run          # Same
 npx vitest watch        # Watch mode
 ```
