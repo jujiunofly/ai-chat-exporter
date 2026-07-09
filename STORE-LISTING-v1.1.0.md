@@ -2,7 +2,7 @@
 
 ## Extension Name
 ```
-AI Chat Exporter
+AI Chat Exporter: Free, No Limits
 ```
 
 ## Short Description (132 chars max)
