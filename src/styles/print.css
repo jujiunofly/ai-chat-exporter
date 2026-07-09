@@ -3,6 +3,8 @@
  */
 
 html {
+  height: auto;
+  min-height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -12,10 +14,24 @@ body {
   width: auto !important;
   min-width: 0 !important;
   max-width: 100%;
+  height: auto;
   min-height: 100vh;
   background: var(--bg-secondary);
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+#__plasmo {
+  width: 100%;
+  min-height: 100vh;
+  overflow: visible;
+}
+
+.popup-container {
+  width: auto;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
 }
 
 /* ===== Preview Container ===== */

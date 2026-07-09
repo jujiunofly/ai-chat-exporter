@@ -21,6 +21,7 @@ import type {
 import { DEFAULT_SETTINGS } from './lib/types'
 import { getDefaultScheduledExportSettings } from './lib/scheduled-export'
 import { t, type Locale } from './lib/i18n'
+import { useFullPageScroll } from './lib/use-full-page-scroll'
 
 /** App version pulled from the extension manifest (single source of truth) */
 const APP_VERSION = chrome.runtime.getManifest()?.version ?? '1.0.3'
@@ -69,6 +70,8 @@ const MoonIcon = () => (
  * Options page component
  */
 export default function Options() {
+  useFullPageScroll()
+
   const [settings, setSettings] = useState<ExtensionSettings>(DEFAULT_SETTINGS)
   const [saved, setSaved] = useState(false)
   const [scheduleSettings, setScheduleSettings] = useState<ScheduledExportSettings>(

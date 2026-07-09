@@ -10,6 +10,8 @@
 }
 
 html {
+  height: auto;
+  min-height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -22,8 +24,22 @@ body {
   background-color: var(--bg-secondary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+  height: auto;
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+#__plasmo {
+  width: 100%;
+  min-height: 100vh;
+  overflow: visible;
+}
+
+.popup-container {
+  width: auto;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
 }
 
 .options-container {

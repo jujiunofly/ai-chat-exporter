@@ -9,6 +9,7 @@ import '../styles/print.css'
 import type { Conversation, ChatMessage } from '../lib/types'
 import { conversationToMarkdown } from '../lib/export-markdown'
 import { t, type Locale } from '../lib/i18n'
+import { useFullPageScroll } from '../lib/use-full-page-scroll'
 
 type PreviewMode = 'rendered' | 'markdown'
 
@@ -90,6 +91,8 @@ function MessageBubble({ msg, platformName }: { msg: ChatMessage; platformName: 
  * Preview page for exported conversations with polished document layout
  */
 export default function Preview() {
+  useFullPageScroll()
+
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [mode, setMode] = useState<PreviewMode>('rendered')
   const [markdownContent, setMarkdownContent] = useState<string>('')

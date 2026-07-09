@@ -31,6 +31,8 @@ describe('Options page layout isolation', () => {
 
     expect(source).toMatch(/html\s*\{[\s\S]*overflow-y:\s*auto[\s\S]*\}/)
     expect(source).toMatch(/html\s*\{[\s\S]*overflow-x:\s*hidden[\s\S]*\}/)
+    expect(source).toMatch(/#__plasmo\s*\{[\s\S]*overflow:\s*visible[\s\S]*\}/)
+    expect(source).toMatch(/\.popup-container\s*\{[\s\S]*max-height:\s*none[\s\S]*\}/)
   })
 
   it('overrides popup html overflow rules so preview pages can scroll', () => {
@@ -38,6 +40,21 @@ describe('Options page layout isolation', () => {
 
     expect(source).toMatch(/html\s*\{[\s\S]*overflow-y:\s*auto[\s\S]*\}/)
     expect(source).toMatch(/html\s*\{[\s\S]*overflow-x:\s*hidden[\s\S]*\}/)
+    expect(source).toMatch(/#__plasmo\s*\{[\s\S]*overflow:\s*visible[\s\S]*\}/)
+    expect(source).toMatch(/\.popup-container\s*\{[\s\S]*max-height:\s*none[\s\S]*\}/)
+  })
+
+  it('uses a runtime scroll guard on full-page extension surfaces', () => {
+    const optionsSource = readSource('src/options.tsx')
+    const previewSource = readSource('src/tabs/preview.tsx')
+    const hookSource = readSource('src/lib/use-full-page-scroll.ts')
+
+    expect(optionsSource).toContain('useFullPageScroll()')
+    expect(previewSource).toContain('useFullPageScroll()')
+    expect(hookSource).toContain("setProperty('overflow-y', 'auto', 'important')")
+    expect(hookSource).toContain("setProperty('width', 'auto', 'important')")
+    expect(hookSource).toContain("getElementById('__plasmo')")
+    expect(hookSource).toContain("setProperty('overflow', 'visible', 'important')")
   })
 
   it('keeps appearance and storage controls visible in the first settings card', () => {
