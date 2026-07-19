@@ -280,6 +280,20 @@ describe('Export PDF', () => {
       
       expect(html).toContain('meta name="viewport"')
     })
+
+    it('escapes HTML in link attributes and LaTex segments', () => {
+      const conv = createConversation({
+        messages: [{
+          id: 'msg-1',
+          role: 'assistant',
+          content: '[link](https://example.com/?q=&quot; onmouseover=&quot;alert(1))\n\n$$<img src=x onerror=alert(1)>$$'
+        }]
+      })
+      const html = conversationToHtml(conv, defaultOptions)
+
+      expect(html).not.toContain('onmouseover=&quot;alert(1)')
+      expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    })
   })
 
   describe('PDF Blob Generation (mocked)', () => {

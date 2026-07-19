@@ -191,7 +191,7 @@ function inlineMarkdownToHtml(line: string): string {
     if (/^(javascript|data|vbscript):/i.test(safeUrl)) {
       return text
     }
-    return `<a href="${safeUrl}">${text}</a>`
+    return `<a href="${escapeHtml(safeUrl)}">${text}</a>`
   })
   return result
 }
@@ -317,8 +317,7 @@ function formatHtmlContent(content: string): string {
       const langAttr = lang ? ` data-language="${escapeHtml(lang)}"` : ''
       html += `<pre${langAttr}><code>${escapeHtml(code)}</code></pre>\n`
     } else if (segment.type === 'latex') {
-      // Preserve LaTeX notation as-is (do NOT escape)
-      html += `<p class="latex">${segment.content}</p>\n`
+      html += `<p class="latex">${escapeHtml(segment.content)}</p>\n`
     } else {
       // Regular text: convert markdown to HTML
       html += markdownTextToHtml(segment.content)
@@ -685,4 +684,3 @@ export async function exportToPdf(
  * @param conversation - The conversation
  * @param options - Export options
  */
-

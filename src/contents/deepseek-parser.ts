@@ -465,7 +465,7 @@ async function main() {
     const conversation = await parser.parseCurrentConversation()
     if (conversation) {
       chrome.storage.local.set({
-        [`conversation-${conversation.id}`]: conversation
+        [`conversation-${conversation.id}`]: { ...conversation, timestamp: Date.now() }
       })
     }
   }

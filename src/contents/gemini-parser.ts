@@ -57,7 +57,7 @@ const HOOK_SCRIPT_CODE = `(() => {
   function processRequest(url, body) {
     try {
       var atMatch = body ? body.match(/at=([a-zA-Z0-9%:\\-_]+)/) : null
-      var sidMatch = url ? url.match(/f\\.sid=([0-9]+)/) : null
+      var sidMatch = url ? url.match(/f\\.sid=([+-]?[0-9]+)/) : null
 
       if (atMatch || sidMatch) {
         result.at = atMatch ? decodeURIComponent(atMatch[1]) : result.at
@@ -102,6 +102,7 @@ export class GeminiParser implements PlatformParser {
    */
   isConversationPage(): boolean {
     return !!(
+      document.querySelector('user-query, model-response') ||
       document.querySelector('[class*="message-content"]') ||
       document.querySelector('[class*="response-container"]') ||
       document.querySelector('[class*="conversation"]') ||
@@ -122,7 +123,7 @@ export class GeminiParser implements PlatformParser {
     const pageTitle = document.title
     if (pageTitle) {
       // Gemini formats titles as "Conversation Title - Gemini"
-      const cleaned = pageTitle.replace(/\s*[–|]\s*Gemini.*$/i, '').trim()
+      const cleaned = pageTitle.replace(/\s*[-–|]\s*Gemini.*$/i, '').trim()
       if (cleaned && cleaned !== 'Gemini' && cleaned.length > 0) {
         return cleaned
       }
@@ -138,7 +139,7 @@ export class GeminiParser implements PlatformParser {
     }
 
     // 3. Try first user message as fallback
-    const firstUserMsg = document.querySelector('.user-query, [class*="user-message"], [data-message-author-role="user"]')
+    const firstUserMsg = document.querySelector('user-query, .user-query, [class*="user-message"], [data-message-author-role="user"]')
     if (firstUserMsg) {
       const text = extractTextContent(firstUserMsg)
       if (text && text.length > 0) {
@@ -268,8 +269,12 @@ export class GeminiParser implements PlatformParser {
    */
   private async getSessionId(): Promise<string> {
     try {
-      const stored = await chrome.storage.local.get(['gemini_credentials'])
-      return stored.gemini_credentials?.sid || ''
+      const stored = await chrome.storage.local.get(['gemini_credentials', 'gemini_credentials_map'])
+      const credentialsMap: Record<string, { sid?: string; accountSlot?: string }> = stored.gemini_credentials_map || {}
+      const accountSlot = this.getAccountSlot()
+      const slotCreds = Object.values(credentialsMap).find(c => c.accountSlot === accountSlot)
+
+      return slotCreds?.sid || stored.gemini_credentials?.sid || ''
     } catch {
       return ''
     }
@@ -356,6 +361,7 @@ export class GeminiParser implements PlatformParser {
       let hasMore = true
       let retries = 0
       const maxRetries = 2
+      const seenPageTokens = new Set<string>()
 
       while (hasMore) {
         try {
@@ -404,11 +410,14 @@ export class GeminiParser implements PlatformParser {
                   conversations.push(...items)
                   parsed = true
                 }
-                // Check for next page token in the response
-                if (data[0] && Array.isArray(data[0]) && data[0][1]) {
-                  nextPageToken = data[0][1]
-                } else {
+                const returnedPageToken = data[0] && Array.isArray(data[0]) && typeof data[0][1] === 'string'
+                  ? data[0][1]
+                  : ''
+                if (!returnedPageToken || seenPageTokens.has(returnedPageToken)) {
                   hasMore = false
+                } else {
+                  seenPageTokens.add(returnedPageToken)
+                  nextPageToken = returnedPageToken
                 }
               }
             } catch {
@@ -433,7 +442,7 @@ export class GeminiParser implements PlatformParser {
       return this.getConversationList()
     }
 
-    return conversations
+    return Array.from(new Map(conversations.map(item => [item.id, item])).values())
   }
 
   /**
@@ -536,7 +545,7 @@ export class GeminiParser implements PlatformParser {
       let title = 'Untitled Conversation'
       const pageTitle = document.title
       if (pageTitle) {
-        const cleaned = pageTitle.replace(/\s*[–|]\s*Gemini.*$/i, '').trim()
+        const cleaned = pageTitle.replace(/\s*[-–|]\s*Gemini.*$/i, '').trim()
         if (cleaned && cleaned !== 'Gemini') {
           title = cleaned
         }
@@ -864,7 +873,7 @@ async function main() {
     const conversation = await parser.parseCurrentConversation()
     if (conversation) {
       chrome.storage.local.set({
-        [`conversation-${conversation.id}`]: conversation
+        [`conversation-${conversation.id}`]: { ...conversation, timestamp: Date.now() }
       })
     }
   }
