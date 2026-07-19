@@ -9,7 +9,7 @@ import { preferMoreCompleteConversation } from '../lib/parser-fallback'
 /**
  * ChatGPT parser implementation
  */
-class ChatGPTParser implements PlatformParser {
+export class ChatGPTParser implements PlatformParser {
   platform = 'chatgpt' as const
   
   /**
@@ -140,7 +140,7 @@ class ChatGPTParser implements PlatformParser {
     const maxRetries = 1
 
     // Get access token for Authorization header
-    const token = await this.getAccessToken()
+    let token = await this.getAccessToken()
 
     while (hasMore) {
       try {
@@ -164,6 +164,7 @@ class ChatGPTParser implements PlatformParser {
           if (retries < maxRetries) {
             retries++
             await this.resetAccessToken()
+            token = await this.getAccessToken()
             continue
           }
           console.error('[ChatGPT Parser] Authentication expired')
@@ -215,53 +216,49 @@ class ChatGPTParser implements PlatformParser {
    */
   async fetchConversationDetail(id: string): Promise<Conversation | null> {
     try {
-      const token = await this.getAccessToken()
-      const response = await fetch(
-        `https://chatgpt.com/backend-api/conversation/${id}`,
-        {
-          credentials: 'include',
-          headers: {
-            'Accept': 'application/json',
-            'Authorization': 'Bearer ' + token,
-            'oai-language': 'en-US',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
+      let token = await this.getAccessToken()
+      let data: any | null = null
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await fetch(
+          `https://chatgpt.com/backend-api/conversation/${id}`,
+          {
+            credentials: 'include',
+            headers: {
+              'Accept': 'application/json',
+              'Authorization': 'Bearer ' + token,
+              'oai-language': 'en-US',
+              'sec-fetch-dest': 'empty',
+              'sec-fetch-mode': 'cors',
+              'sec-fetch-site': 'same-origin',
+            }
           }
+        )
+
+        if (response.status === 401 && attempt === 0) {
+          await this.resetAccessToken()
+          token = await this.getAccessToken()
+          continue
         }
-      )
 
-      if (response.status === 401) {
-        await this.resetAccessToken()
-        console.error(`[ChatGPT Parser] Auth expired for conversation ${id}`)
-        return null
+        if (!response.ok) {
+          console.error(`[ChatGPT Parser] Failed to fetch conversation ${id}: ${response.status}`)
+          return null
+        }
+
+        data = await response.json()
+        break
       }
 
-      if (!response.ok) {
-        console.error(`[ChatGPT Parser] Failed to fetch conversation ${id}: ${response.status}`)
-        return null
-      }
-
-      const data = await response.json()
+      if (!data) return null
       const messages: ChatMessage[] = []
 
       // ChatGPT API returns a tree of messages with mapping
       if (data.mapping) {
-        // Walk the mapping to extract messages in order
         const nodeMap: Record<string, any> = data.mapping
-        // Find the root node (no parent)
-        let rootNode: any = null
-        for (const key of Object.keys(nodeMap)) {
-          const node = nodeMap[key]
-          if (!node.parent) {
-            rootNode = node
-            break
-          }
-        }
-
-        // Walk from root to leaf, collecting messages
-        const walkMessages = (node: any) => {
-          if (!node) return
+        // A conversation mapping contains every edited/regenerated branch.
+        // Only its current_node is the path the user is actually viewing.
+        for (const node of this.getActiveConversationPath(nodeMap, data.current_node)) {
           if (node.message) {
             const msg = node.message
             const role = msg.author?.role
@@ -277,15 +274,7 @@ class ChatGPTParser implements PlatformParser {
               }
             }
           }
-          // Follow children (pick first child for linear order)
-          if (node.children && node.children.length > 0) {
-            for (const childId of node.children) {
-              walkMessages(nodeMap[childId])
-            }
-          }
         }
-
-        walkMessages(rootNode)
       }
 
       // Fallback: try flat messages array
@@ -318,6 +307,44 @@ class ChatGPTParser implements PlatformParser {
       console.error(`[ChatGPT Parser] Error fetching conversation detail:`, error)
       return null
     }
+  }
+
+  /**
+   * Return the root-to-leaf path for the active branch in ChatGPT's message
+   * tree. `current_node` is authoritative; older payloads without it fall
+   * back to the newest leaf rather than exporting every abandoned branch.
+   */
+  private getActiveConversationPath(
+    nodeMap: Record<string, any>,
+    currentNodeId: unknown
+  ): any[] {
+    let nodeId = typeof currentNodeId === 'string' && nodeMap[currentNodeId]
+      ? currentNodeId
+      : null
+
+    if (!nodeId) {
+      const leaves = Object.entries(nodeMap).filter(([, node]) =>
+        !Array.isArray(node?.children) || node.children.length === 0
+      )
+      nodeId = leaves
+        .sort(([, left], [, right]) => {
+          const leftTime = Number(left?.message?.create_time) || 0
+          const rightTime = Number(right?.message?.create_time) || 0
+          return rightTime - leftTime
+        })
+        .at(0)?.[0] || null
+    }
+
+    const path: any[] = []
+    const visited = new Set<string>()
+    while (nodeId && nodeMap[nodeId] && !visited.has(nodeId)) {
+      visited.add(nodeId)
+      const node = nodeMap[nodeId]
+      path.unshift(node)
+      nodeId = typeof node.parent === 'string' ? node.parent : null
+    }
+
+    return path
   }
   
   /**
@@ -609,7 +636,7 @@ async function main() {
     const conversation = await parser.parseCurrentConversation()
     if (conversation) {
       chrome.storage.local.set({
-        [`conversation-${conversation.id}`]: conversation
+        [`conversation-${conversation.id}`]: { ...conversation, timestamp: Date.now() }
       })
     }
   }

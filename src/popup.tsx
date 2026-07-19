@@ -222,7 +222,7 @@ export default function Popup() {
         setConversation(response.data)
         // Set in storage for the preview page
         await chrome.storage.local.set({
-          [`conversation-${response.data.id}`]: response.data
+          [`conversation-${response.data.id}`]: { ...response.data, timestamp: Date.now() }
         })
         setError(null)
       } else {

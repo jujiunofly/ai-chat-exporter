@@ -19,6 +19,7 @@ import { DEFAULT_SETTINGS } from './lib/types'
 import { conversationToMarkdown } from './lib/export-markdown'
 import { generateFilename } from './lib/filename'
 import { buildDownloadFilename } from './lib/download-path'
+import { textToDataUrl } from './lib/download-url'
 import {
   getDefaultScheduledExportSettings,
   isDueForRun,
@@ -37,6 +38,7 @@ chrome.runtime.onInstalled.addListener((details) => {
     chrome.storage.local.set({ settings: DEFAULT_SETTINGS })
     // Create the scheduled export checker alarm (every 15 minutes)
     chrome.alarms.create('scheduled-export-check', { periodInMinutes: 15 })
+    chrome.alarms.create('cleanup-exports', { periodInMinutes: 60 })
   }
 })
 
@@ -44,6 +46,14 @@ chrome.runtime.onInstalled.addListener((details) => {
 chrome.alarms.get('scheduled-export-check', (alarm) => {
   if (!alarm) {
     chrome.alarms.create('scheduled-export-check', { periodInMinutes: 15 })
+  }
+})
+
+// Conversation snapshots are only needed briefly for the preview page. Keep
+// their expiry alarm alive across extension restarts and upgrades.
+chrome.alarms.get('cleanup-exports', (alarm) => {
+  if (!alarm) {
+    chrome.alarms.create('cleanup-exports', { periodInMinutes: 60 })
   }
 })
 
@@ -268,8 +278,9 @@ async function handleScheduledExportRun(): Promise<{ data?: boolean; error?: str
       return { error: 'Scheduled export already running' }
     }
 
-    // Run in background (don't await — it takes a long time)
-    checkAndRunScheduledExports()
+    // A user-triggered run must not be held back by the next scheduled due
+    // time (or by the global schedule toggle).
+    void checkAndRunScheduledExports(true)
     return { data: true }
   } catch (err) {
     return { error: (err as Error).message }
@@ -357,9 +368,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 /**
  * Main entry: check all platforms and run scheduled exports as needed
  */
-async function checkAndRunScheduledExports(): Promise<void> {
+async function checkAndRunScheduledExports(force = false): Promise<void> {
   const config = await getScheduledExportSettings()
-  if (!config.enabled) return
+  if (!config.enabled && !force) return
 
   // Prevent concurrent runs
   const statusResult = await chrome.storage.local.get('scheduledExportStatus')
@@ -367,8 +378,10 @@ async function checkAndRunScheduledExports(): Promise<void> {
   if (currentStatus?.isRunning) return
 
   const now = Date.now()
+  let remainingBudget = config.maxTotalPerRun
 
   for (const platform of ALL_PLATFORMS) {
+    if (remainingBudget <= 0) break
     const platformConfig = config.platforms[platform]
     if (!platformConfig?.enabled) continue
 
@@ -376,9 +389,14 @@ async function checkAndRunScheduledExports(): Promise<void> {
     const result = await chrome.storage.local.get(lastRunKey)
     const lastRun = (result[lastRunKey] as number) || 0
 
-    if (isDueForRun(platformConfig.frequency, lastRun, now)) {
-      await runScheduledExportForPlatform(platform, config)
-      await chrome.storage.local.set({ [lastRunKey]: now })
+    if (force || isDueForRun(platformConfig.frequency, lastRun, now)) {
+      const runResult = await runScheduledExportForPlatform(platform, config, remainingBudget)
+      remainingBudget -= runResult.processed
+      // Do not postpone the next automatic retry after a platform-level
+      // failure such as an expired login or a network outage.
+      if (runResult.succeeded) {
+        await chrome.storage.local.set({ [lastRunKey]: now })
+      }
     }
   }
 }
@@ -461,8 +479,13 @@ async function markAsExported(record: ExportedConversationRecord): Promise<void>
   if (!ids.includes(record.id)) {
     ids.push(record.id)
     // Keep only last 500 IDs per platform to prevent unbounded growth
-    if (ids.length > 500) ids.splice(0, ids.length - 500)
+    const evictedIds = ids.length > 500 ? ids.splice(0, ids.length - 500) : []
     await chrome.storage.local.set({ [key]: ids })
+    if (evictedIds.length > 0) {
+      await chrome.storage.local.remove(
+        evictedIds.map(id => `exportedRecord-${record.platform}-${id}`)
+      )
+    }
   }
 
   // Store the full record for status/history display
@@ -474,8 +497,11 @@ async function clearExportedHistory(platform?: ExportablePlatform): Promise<void
   const platforms = platform
     ? [platform]
     : ALL_PLATFORMS
+  const stored = await chrome.storage.local.get(null) as unknown as Record<string, unknown>
   for (const p of platforms) {
-    await chrome.storage.local.remove(`exportedIds-${p}`)
+    const recordPrefix = `exportedRecord-${p}-`
+    const recordKeys = Object.keys(stored).filter(key => key.startsWith(recordPrefix))
+    await chrome.storage.local.remove([`exportedIds-${p}`, ...recordKeys])
   }
 }
 
@@ -486,10 +512,16 @@ async function clearExportedHistory(platform?: ExportablePlatform): Promise<void
 /**
  * Run scheduled export for a single platform
  */
+interface ScheduledExportRunResult {
+  processed: number
+  succeeded: boolean
+}
+
 async function runScheduledExportForPlatform(
   platform: ExportablePlatform,
-  config: ScheduledExportSettings
-): Promise<void> {
+  config: ScheduledExportSettings,
+  remainingBudget: number
+): Promise<ScheduledExportRunResult> {
   // Update status: starting
   const status: ScheduledExportStatus = {
     lastRunAt: Date.now(),
@@ -501,6 +533,8 @@ async function runScheduledExportForPlatform(
   await chrome.storage.local.set({ scheduledExportStatus: status })
 
   let tabId: number | null = null
+  let exported = 0
+  let failed = 0
 
   try {
     // 1. Open a tab to the platform
@@ -535,16 +569,13 @@ async function runScheduledExportForPlatform(
 
     // 6. Limit to max per run
     const platformConfig = config.platforms[platform]
-    const toExport = newConversations.slice(0, platformConfig.maxPerRun)
+    const toExport = newConversations.slice(0, Math.min(platformConfig.maxPerRun, remainingBudget))
 
     // 7. Export each conversation
-    let exported = 0
-    let failed = 0
-
     for (const convItem of toExport) {
       try {
         // Check total limit
-        if (exported + failed >= config.maxTotalPerRun) break
+        if (exported + failed >= remainingBudget) break
 
         // Fetch full conversation detail
         const detailResponse = await chrome.tabs.sendMessage(tabId, {
@@ -583,11 +614,9 @@ async function runScheduledExportForPlatform(
         )
 
         // Download
-        const blob = new Blob([markdown], { type: 'text/markdown' })
-        const url = URL.createObjectURL(blob)
+        const url = textToDataUrl(markdown, 'text/markdown')
 
         await chrome.downloads.download({ url, filename, saveAs: false })
-        setTimeout(() => URL.revokeObjectURL(url), 5000)
 
         // Track exported conversation
         await markAsExported({
@@ -611,6 +640,7 @@ async function runScheduledExportForPlatform(
     status.lastRunExported = exported
     status.lastRunFailed = failed
     await chrome.storage.local.set({ scheduledExportStatus: status })
+    return { processed: exported + failed, succeeded: true }
 
   } catch (err) {
     console.error(`[Scheduled Export] Platform ${platform} failed:`, err)
@@ -618,6 +648,7 @@ async function runScheduledExportForPlatform(
     status.isRunning = false
     status.lastRunError = (err as Error).message
     await chrome.storage.local.set({ scheduledExportStatus: status })
+    return { processed: exported + failed, succeeded: false }
   } finally {
     // 9. Close the tab
     if (tabId && config.closeTabAfterExport) {

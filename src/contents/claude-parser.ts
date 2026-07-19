@@ -10,6 +10,7 @@
 import type { Conversation, ChatMessage, PlatformParser, ConversationListItem, ConversationArtifact } from '../lib/types'
 import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
 import { preferMoreCompleteConversation } from '../lib/parser-fallback'
+import { inferClaudeArtifactType } from '../lib/claude-artifact'
 
 /** UUID regex for matching conversation IDs and org IDs */
 const UUID_REGEX = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
@@ -339,11 +340,8 @@ class ClaudeParser implements PlatformParser {
                 
                 // Extract artifact from tool_use with input.content (artifacts/artifacts)
                 if (block.input?.content) {
-                  const artifactType = block.name?.includes('html') || block.name?.includes('document') 
-                    ? 'html' 
-                    : 'code'
                   artifacts.push({
-                    type: artifactType,
+                    type: inferClaudeArtifactType(block),
                     title: block.input.title || block.name || 'Artifact',
                     content: block.input.content,
                     language: block.name,
@@ -692,7 +690,7 @@ async function main() {
     const conversation = await parser.parseCurrentConversation()
     if (conversation) {
       chrome.storage.local.set({
-        [`conversation-${conversation.id}`]: conversation
+        [`conversation-${conversation.id}`]: { ...conversation, timestamp: Date.now() }
       })
     }
   }
