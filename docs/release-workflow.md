@@ -50,6 +50,7 @@ npm audit --omit=dev --json
 
 unzip -t ai-chat-exporter.zip
 unzip -t ai-chat-exporter-firefox.zip
+unzip -t ai-chat-exporter-source.zip
 unzip -p ai-chat-exporter.zip manifest.json
 unzip -p ai-chat-exporter-firefox.zip manifest.json
 ~~~
@@ -59,8 +60,9 @@ The expected results are:
 - Dependency installation, tests, lint, and both browser builds pass.
 - The production dependency audit reports zero vulnerabilities, or each
   remaining finding is explicitly dispositioned before release.
-- Both archive integrity checks pass.
-- Each packaged manifest has the intended version and manifest version 3.
+- All three archive integrity checks pass.
+- Each browser-package manifest has the intended version and manifest version 3.
+- The source archive contains tracked source only and is suitable for Firefox AMO source review; it is not installable.
 
 The PDF suite can report jsdom limitations around `getComputedStyle` or
 `scrollTo`; those messages are acceptable only when the relevant test passes.
@@ -79,17 +81,31 @@ runs from publishing the same version.
 
 ## 5. Produce and publish browser packages
 
-`npm run build` produces the two browser-store upload artifacts:
+`npm run build` produces three archives: two browser-store packages and one
+source-review archive. The source archive is created with `git archive` from the
+selected tracked Git ref. The tracked `.gitattributes` explicitly applies
+`export-ignore` to generated/dependency/cache/private output: `node_modules`,
+`build`, `.plasmo`, the generated `/ai-chat-exporter` mirror, ZIPs, TypeScript
+build-info files, and `.env` variants. Untracked files are not included by
+`git archive`. Its single top-level directory is versioned as
+`ai-chat-exporter-<package version>-source/`.
 
-| Store | Upload artifact |
+The build validates the generated source ZIP immediately after archiving. It
+requires successful ZIP integrity, exactly that one versioned top-level root, a
+matching archived `package.json` version for `SOURCE_ARCHIVE_REF`, and no `.git`,
+forbidden generated/dependency output, nested ZIP, TypeScript build-info, or
+`.env` paths. Any validation failure fails the build before artifacts can be
+published.
+
+| Store or purpose | Archive |
 | --- | --- |
 | Chrome Web Store | `ai-chat-exporter.zip` |
 | Microsoft Edge Add-ons | `ai-chat-exporter.zip` |
 | Firefox Add-ons | `ai-chat-exporter-firefox.zip` |
+| Firefox AMO source review (not installable) | `ai-chat-exporter-source.zip` |
 
-`ai-chat-exporter-source.zip` is a source archive, not a browser-store upload
-artifact. Before an upload, compare the version embedded in each ZIP with the
-current store listing. Upload only a strictly newer, fully verified package.
+Before a browser-package upload, compare the version embedded in each ZIP with
+the current store listing. Upload only a strictly newer, fully verified package.
 
 Browser-store upload is a production deployment. Upload through the applicable
 developer dashboard only when it is explicitly in scope, and never expose

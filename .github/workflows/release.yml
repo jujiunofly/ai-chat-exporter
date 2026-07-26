@@ -67,7 +67,7 @@ jobs:
       - name: Run lint
         run: npm run lint
 
-      - name: Build browser packages
+      - name: Build browser and source packages
         run: npm run build
 
       - name: Create manual release tag after validation
@@ -96,11 +96,12 @@ jobs:
           cat > RELEASE_NOTES.md <<'EOF'
           ## AI Chat Exporter
 
-          Browser extension packages for Chrome/Edge and Firefox.
+          Browser extension packages for Chrome/Edge and Firefox, plus a tracked-source archive for Firefox review.
 
           ### Files
           - `ai-chat-exporter.zip` — Chrome Web Store / Microsoft Edge Add-ons package
           - `ai-chat-exporter-firefox.zip` — Firefox Add-ons package
+          - `ai-chat-exporter-source.zip` — source archive for Firefox AMO source review (not installable)
 
           ### Validation
           - Dependencies, tests, and lint run before release packaging.
@@ -114,9 +115,9 @@ jobs:
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" ai-chat-exporter.zip ai-chat-exporter-firefox.zip --clobber
+            gh release upload "${TAG}" ai-chat-exporter.zip ai-chat-exporter-firefox.zip ai-chat-exporter-source.zip --clobber
           else
-            gh release create "${TAG}" ai-chat-exporter.zip ai-chat-exporter-firefox.zip \
+            gh release create "${TAG}" ai-chat-exporter.zip ai-chat-exporter-firefox.zip ai-chat-exporter-source.zip \
               --title "AI Chat Exporter ${TAG}" \
               --notes-file RELEASE_NOTES.md
           fi
@@ -128,4 +129,5 @@ jobs:
           path: |
             ai-chat-exporter.zip
             ai-chat-exporter-firefox.zip
+            ai-chat-exporter-source.zip
           if-no-files-found: error
