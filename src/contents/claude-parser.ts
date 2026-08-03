@@ -441,11 +441,13 @@ export class ClaudeParser implements PlatformParser {
             if (!block || typeof block !== 'object') continue
             const typedBlock = block as Record<string, any>
             if (typedBlock.type === 'tool_use' && typedBlock.input?.content) {
+              const artifactType = inferClaudeArtifactType(typedBlock)
               artifacts.push({
-                type: inferClaudeArtifactType(typedBlock),
+                type: artifactType,
                 title: typedBlock.input.title || typedBlock.name || 'Artifact',
                 content: typedBlock.input.content,
-                language: typedBlock.name,
+                language: typedBlock.input.language || typedBlock.input.lang ||
+                  (artifactType === 'code' ? typedBlock.name : undefined),
                 mimeType: typedBlock.input.mimeType
               })
             } else if (typedBlock.type === 'document') {

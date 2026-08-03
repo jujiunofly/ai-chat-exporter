@@ -147,6 +147,7 @@ describe('Claude parser live DOM regressions', () => {
       ])
       expect(conversation?.messages[1].content).not.toContain('private reasoning')
       expect(conversation?.artifacts?.[0]).toMatchObject({ title: 'Dashboard', type: 'html' })
+      expect(conversation?.artifacts?.[0].language).toBeUndefined()
     } finally {
       vi.stubGlobal('fetch', originalFetch)
     }
