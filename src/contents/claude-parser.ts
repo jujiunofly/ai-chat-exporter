@@ -25,6 +25,125 @@ const LAST_ACTIVE_ORG_REGEX = /lastActiveOrg[^a-f0-9]{0,120}?([a-f0-9]{8}-[a-f0-
 /** Regex to extract org ID from analytics/user ID calls */
 const USER_ID_REGEX = /"_setUserId",\s*"([a-f0-9-]{36})"/i
 
+type ClaudeApiRecord = Record<string, any>
+
+function firstString(...values: unknown[]): string | null {
+  return values.find(value => typeof value === 'string' && value.trim()) as string | null || null
+}
+
+function recordId(record: ClaudeApiRecord): string | null {
+  return firstString(record.uuid, record.id, record.message_uuid, record.messageUuid)
+}
+
+function parentId(record: ClaudeApiRecord): string | null {
+  return firstString(
+    record.parent_uuid,
+    record.parent_message_uuid,
+    record.parentMessageUuid,
+    record.parent_id,
+    record.parentId,
+    record.parent?.uuid,
+    record.parent?.id
+  )
+}
+
+function findBranchPointer(value: any, depth = 0): string | null {
+  if (!value || depth > 3 || typeof value !== 'object') return null
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findBranchPointer(item, depth + 1)
+      if (found) return found
+    }
+    return null
+  }
+  const direct = firstString(
+    value.current_leaf_message_uuid,
+    value.current_leaf_uuid,
+    value.currentLeafMessageUuid,
+    value.currentLeafUuid,
+    value.current_node_uuid,
+    value.currentNodeUuid,
+    value.current_node?.uuid,
+    value.current_node?.id,
+    value.currentNode?.uuid,
+    value.currentNode?.id
+  )
+  if (direct) return direct
+  for (const key of ['conversation', 'metadata', 'tree', 'branch']) {
+    const found = findBranchPointer(value[key], depth + 1)
+    if (found) return found
+  }
+  return null
+}
+
+/**
+ * Resolve Claude's tree response to one active parent chain. Returning every
+ * record from a `tree=True` response exports abandoned regenerated answers.
+ * When an explicit leaf is unavailable, active flags or the longest coherent
+ * chain are used as a conservative fallback instead of flattening siblings.
+ */
+export function selectClaudeActiveBranch(
+  records: ClaudeApiRecord[],
+  payload: unknown
+): ClaudeApiRecord[] {
+  if (records.length < 2) return records
+  const byId = new Map(records.map(record => [recordId(record), record]).filter(([id]) => Boolean(id)) as [string, ClaudeApiRecord][])
+  const leafId = findBranchPointer(payload)
+
+  const buildChain = (startId: string): ClaudeApiRecord[] => {
+    const chain: ClaudeApiRecord[] = []
+    const seen = new Set<string>()
+    let current: string | null = startId
+    while (current && !seen.has(current)) {
+      seen.add(current)
+      const record = byId.get(current)
+      if (!record) return []
+      chain.push(record)
+      current = parentId(record)
+    }
+    if (current) return []
+    return chain.reverse()
+  }
+
+  if (leafId && byId.has(leafId)) {
+    const chain = buildChain(leafId)
+    if (chain.length > 0) return chain
+  }
+
+  const active = records.filter(record =>
+    record.is_current === true || record.isCurrent === true || record.active === true ||
+    record.selected === true || record.is_active === true
+  )
+  if (active.length > 0) {
+    const activeLeaf = active[active.length - 1]
+    const activeId = recordId(activeLeaf)
+    if (activeId) {
+      const chain = buildChain(activeId)
+      if (chain.length > 0) return chain
+    }
+  }
+
+  const hasParents = records.some(record => parentId(record))
+  if (!hasParents) return records
+
+  // Choose the most complete parent chain. Ties use the last leaf in API
+  // order, which is generally the newest branch, while still excluding all
+  // sibling records from the export.
+  const children = new Set(records.map(parentId).filter(Boolean) as string[])
+  const leaves = records.filter(record => {
+    const id = recordId(record)
+    return Boolean(id && !children.has(id))
+  })
+  let best: ClaudeApiRecord[] = []
+  for (const leaf of leaves) {
+    const id = recordId(leaf)
+    if (!id) continue
+    const chain = buildChain(id)
+    if (chain.length >= best.length) best = chain
+  }
+  return best.length > 0 ? best : records.slice(0, 1)
+}
+
 /**
  * Extract organization ID from the page.
  * Tries multiple strategies:
@@ -63,7 +182,7 @@ function extractOrgId(): string | null {
 /**
  * Claude parser implementation
  */
-class ClaudeParser implements PlatformParser {
+export class ClaudeParser implements PlatformParser {
   platform = 'claude' as const
 
   /** Cached org ID to avoid re-extracting */
@@ -76,6 +195,8 @@ class ClaudeParser implements PlatformParser {
     return !!(
       document.querySelector('[data-testid="chat-message"]') ||
       document.querySelector('.font-claude-message') ||
+      document.querySelector('[data-is-streaming]') ||
+      document.querySelector('.font-claude-response') ||
       document.querySelector('[data-testid="user-message"]') ||
       document.querySelector('[data-testid="assistant-message"]') ||
       window.location.pathname.match(/\/chat\/[a-f0-9-]+/)
@@ -303,7 +424,9 @@ class ClaudeParser implements PlatformParser {
       const messages: ChatMessage[] = []
       const artifacts: ConversationArtifact[] = []
 
-      for (const msg of getApiMessageRecords(data)) {
+      const apiRecords = getApiMessageRecords(data) as ClaudeApiRecord[]
+      const activeRecords = selectClaudeActiveBranch(apiRecords, data)
+      for (const msg of activeRecords) {
           const role = normalizeApiMessageRole(msg)
           if (!role) continue
 
@@ -368,14 +491,36 @@ class ClaudeParser implements PlatformParser {
     const messages: ChatMessage[] = []
     const seenElements = new Set<Element>()
 
-    // Primary: Use data-testid selectors for Claude's DOM structure
-    const messageContainers = document.querySelectorAll(
-      '[data-testid="chat-message"], [data-testid="user-message"], [data-testid="assistant-message"]'
-    )
+    // Primary: keep the candidates in DOM order. Claude's answer container has
+    // changed from the styling-only `.font-claude-message` class to the more
+    // durable `[data-is-streaming]` attribute. Querying role-specific nodes in
+    // separate passes (all assistants, then all users) silently reorders the
+    // transcript, so the combined selector is intentional.
+    const roleSpecificSelector =
+      '[data-testid="user-message"], [data-testid="assistant-message"], [data-is-streaming], ' +
+      '.font-claude-message, .font-claude-response, [data-role="user"], [data-role="assistant"], ' +
+      '[class*="user-message"], [class*="human-message"], [class*="assistant-message"]'
+    const roleSpecificMessages = document.querySelectorAll(roleSpecificSelector)
+    // Prefer the smallest role-bearing nodes whenever they are available.
+    // Otherwise a generic chat-message wrapper can be parsed as well.
+    const messageContainers = roleSpecificMessages.length > 0
+      ? roleSpecificMessages
+      : document.querySelectorAll('[data-testid="chat-message"]')
 
     if (messageContainers.length > 0) {
       messageContainers.forEach(element => {
         if (seenElements.has(element)) return
+        // A current Claude answer can contain a nested `.font-claude-message`
+        // element inside its `[data-is-streaming]` container. Parse the
+        // semantic container once instead of exporting the same answer twice.
+        const streamingContainer = element.closest('[data-is-streaming]')
+        if (
+          element.matches('.font-claude-message, .font-claude-response') &&
+          streamingContainer &&
+          streamingContainer !== element
+        ) {
+          return
+        }
         seenElements.add(element)
         const message = this.parseMessageElement(element)
         if (message) {
@@ -383,36 +528,26 @@ class ClaudeParser implements PlatformParser {
         }
       })
     } else {
-      // Fallback: try font-claude-message class (assistant) and other selectors
-      const assistantMessages = document.querySelectorAll('.font-claude-message')
-      assistantMessages.forEach(element => {
-        if (seenElements.has(element)) return
-        seenElements.add(element)
-        const content = this.extractMessageContent(element)
-        if (content.trim()) {
-          messages.push({
-            id: generateId(),
-            role: 'assistant',
-            content: cleanText(content)
-          })
-        }
-      })
-
-      // Also try to find user messages by other indicators
-      const userMessages = document.querySelectorAll(
-        '[class*="user-message"], [data-role="user"], [class*="human-message"]'
+      // No known marker matched. Keep a conservative last-resort scan for
+      // message-like nodes, but still walk them in document order.
+      const fallbackMessages = document.querySelectorAll(
+        '[class*="response"], [aria-label*="Claude" i], [aria-label*="assistant" i], ' +
+        '[aria-label*="user" i], [aria-label*="human" i]'
       )
-      userMessages.forEach(element => {
+      fallbackMessages.forEach(element => {
         if (seenElements.has(element)) return
         seenElements.add(element)
         const content = this.extractMessageContent(element)
-        if (content.trim()) {
-          messages.push({
-            id: generateId(),
-            role: 'user',
-            content: cleanText(content)
-          })
-        }
+        if (!content.trim()) return
+
+        const role = this.determineRoleFromElement(element)
+        if (!role) return
+
+        messages.push({
+          id: generateId(),
+          role,
+          content: cleanText(content)
+        })
       })
     }
 
@@ -431,6 +566,14 @@ class ClaudeParser implements PlatformParser {
     if (testId === 'user-message') {
       role = 'user'
     } else if (testId === 'assistant-message') {
+      role = 'assistant'
+    } else if (
+      element.hasAttribute('data-is-streaming') ||
+      element.matches('.font-claude-message, .font-claude-response')
+    ) {
+      // Claude currently marks assistant turns with data-is-streaming. The
+      // value is true while a response is being generated and false once it
+      // settles; both are assistant messages.
       role = 'assistant'
     } else if (testId === 'chat-message') {
       // For chat-message, check for user/assistant indicators inside
@@ -453,7 +596,7 @@ class ClaudeParser implements PlatformParser {
 
     // Extract content from the message
     const contentElement = element.querySelector(
-      '.font-claude-message, [class*="markdown"], [class*="content"]'
+      '.font-claude-message, .font-claude-response, .prose, [class*="markdown"], [class*="content"]'
     ) || element
 
     const content = this.extractMessageContent(contentElement)
@@ -494,7 +637,7 @@ class ClaudeParser implements PlatformParser {
       cls.includes('user') || cls.includes('human') || cls.includes('Human')
     )
     const hasAssistantClass = classList.some(cls =>
-      cls.includes('assistant') || cls.includes('claude') || cls.includes('Claude')
+      cls.includes('assistant') || cls.includes('claude') || cls.includes('Claude') || cls.includes('response')
     )
 
     if (hasUserClass) return 'user'
@@ -508,6 +651,8 @@ class ClaudeParser implements PlatformParser {
     if (ariaLabel.includes('assistant') || ariaLabel.includes('claude') || ariaLabel.includes('ai')) {
       return 'assistant'
     }
+
+    if (element.hasAttribute('data-is-streaming')) return 'assistant'
 
     // Check for role attribute
     const roleAttr = element.getAttribute('role')?.toLowerCase() || ''

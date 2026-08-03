@@ -627,7 +627,7 @@ const parser = new ChatGPTParser()
 
 // Export for content script
 export const config = {
-  matches: ['https://chatgpt.com/*']
+  matches: ['https://chatgpt.com/*', 'https://chat.openai.com/*']
 }
 
 // Main function to run when script loads

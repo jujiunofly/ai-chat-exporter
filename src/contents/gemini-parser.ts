@@ -17,6 +17,29 @@ import {
   extractImages,
   cleanText
 } from '../lib/dom-utils'
+import { preferMoreCompleteConversation, shouldUseApiFallback } from '../lib/parser-fallback'
+
+export interface GeminiCredential {
+  at?: string
+  sid?: string
+  accountSlot?: string
+  lastUsed?: number
+}
+
+/** Select the newest credential for the active account without cross-account
+ * token reuse. Exported so credential selection can be regression-tested
+ * without exposing real credentials. */
+export function selectGeminiCredential(
+  credentialsMap: Record<string, GeminiCredential>,
+  accountSlot: string,
+  required?: 'at' | 'sid'
+): GeminiCredential | null {
+  const candidates = Object.values(credentialsMap)
+    .filter(credential => credential.accountSlot === accountSlot)
+    .filter(credential => Boolean(required ? credential[required] : credential.at || credential.sid))
+    .sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0))
+  return candidates[0] || null
+}
 
 /**
  * Hook script code that runs in the PAGE world (not the content script isolated world).
@@ -209,13 +232,16 @@ export class GeminiParser implements PlatformParser {
     try {
       const stored = await chrome.storage.local.get(['gemini_credentials', 'gemini_credentials_map'])
       const credentials = stored.gemini_credentials
-      const credentialsMap: Record<string, { at?: string; sid?: string; accountSlot?: string; lastUsed?: number }> = stored.gemini_credentials_map || {}
+      const credentialsMap: Record<string, GeminiCredential> = stored.gemini_credentials_map || {}
 
       // Try to find credentials for current account slot
       const accountSlot = this.getAccountSlot()
-      const slotCreds = Object.values(credentialsMap).find(c => c.accountSlot === accountSlot)
+      const slotCreds = selectGeminiCredential(credentialsMap, accountSlot, 'at')
 
       if (slotCreds?.at) return slotCreds.at
+      if (Object.values(credentialsMap).some(c => c.accountSlot && c.accountSlot !== accountSlot)) return null
+      // The legacy singleton is only a fallback for pages where no mapped
+      // account credential exists. A matching account map always wins.
       if (credentials?.at) return credentials.at
     } catch (e) {
       // chrome.storage not available in tests
@@ -276,11 +302,13 @@ export class GeminiParser implements PlatformParser {
   private async getSessionId(): Promise<string> {
     try {
       const stored = await chrome.storage.local.get(['gemini_credentials', 'gemini_credentials_map'])
-      const credentialsMap: Record<string, { sid?: string; accountSlot?: string }> = stored.gemini_credentials_map || {}
+      const credentialsMap: Record<string, GeminiCredential> = stored.gemini_credentials_map || {}
       const accountSlot = this.getAccountSlot()
-      const slotCreds = Object.values(credentialsMap).find(c => c.accountSlot === accountSlot)
+      const slotCreds = selectGeminiCredential(credentialsMap, accountSlot, 'sid')
 
-      return slotCreds?.sid || stored.gemini_credentials?.sid || ''
+      if (slotCreds?.sid) return slotCreds.sid
+      if (Object.values(credentialsMap).some(c => c.accountSlot && c.accountSlot !== accountSlot)) return ''
+      return stored.gemini_credentials?.sid || ''
     } catch {
       return ''
     }
@@ -890,20 +918,18 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'PARSE_CONVERSATION') {
     parser.parseCurrentConversation().then(conversation => {
-      // The visible DOM is authoritative for the active conversation. It maps
-      // exactly to the page the user requested and avoids stale API schemas
-      // replacing four visible turns with unrelated navigation strings.
       const url = window.location.href
       const match = url.match(/\/app\/([a-zA-Z0-9_-]+)/)
-      if (conversation) {
-        sendResponse({ data: conversation })
-      } else if (match) {
+      // A hydrated DOM is authoritative, but a user-only/empty DOM is a
+      // recoverable loading state. Hydrate it through the typed detail RPC
+      // before allowing an export path to treat it as complete.
+      if (match && shouldUseApiFallback(conversation)) {
         parser.fetchConversationDetail(match[1]).then(apiConv => {
-          sendResponse({ data: apiConv })
-        }).catch(() => sendResponse({ data: null }))
-      } else {
-        sendResponse({ data: null })
+          sendResponse({ data: preferMoreCompleteConversation(conversation, apiConv) })
+        }).catch(() => sendResponse({ data: conversation }))
+        return
       }
+      sendResponse({ data: conversation })
     }).catch(error => {
       sendResponse({ error: error.message })
     })

@@ -6,8 +6,13 @@
 import React, { useState, useEffect } from 'react'
 import '../styles/popup.css'
 import '../styles/print.css'
-import type { Conversation, ChatMessage } from '../lib/types'
+import type { Conversation, ChatMessage, ExtensionSettings } from '../lib/types'
+import { DEFAULT_SETTINGS } from '../lib/types'
 import { conversationToMarkdown } from '../lib/export-markdown'
+import { generateFilename } from '../lib/filename'
+import { buildDownloadFilename } from '../lib/download-path'
+import { downloadAndWait } from '../lib/download-completion'
+import { analyzeConversationIntegrity, conversationIntegrityError, isConversationComplete } from '../lib/conversation-integrity'
 import { t, type Locale } from '../lib/i18n'
 import { useFullPageScroll } from '../lib/use-full-page-scroll'
 
@@ -101,13 +106,16 @@ export default function Preview() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const [locale, setLocale] = useState<Locale>('en')
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [settings, setSettings] = useState<ExtensionSettings>(DEFAULT_SETTINGS)
+  const [integrityWarning, setIntegrityWarning] = useState<string | null>(null)
 
   const T = (key: string) => t(key, locale)
 
   // Load settings (theme + locale) from storage
   useEffect(() => {
     chrome.storage.local.get('settings').then(result => {
-      const s = result.settings as { theme?: 'light' | 'dark'; locale?: Locale } | undefined
+      const s = { ...DEFAULT_SETTINGS, ...(result.settings || {}) } as ExtensionSettings
+      setSettings(s)
       if (s?.theme) {
         setTheme(s.theme)
         document.documentElement.setAttribute('data-theme', s.theme)
@@ -126,7 +134,7 @@ export default function Preview() {
     if (conversation) {
       generateMarkdown()
     }
-  }, [conversation])
+  }, [conversation, settings])
 
   /**
    * Load conversation data
@@ -141,9 +149,16 @@ export default function Preview() {
         const conv = result[`conversation-${conversationId}`]
         if (conv) {
           setConversation(conv)
+          const integrity = analyzeConversationIntegrity(conv)
+          setIntegrityWarning(isConversationComplete(conv) ? null : conversationIntegrityError(integrity))
           setLoading(false)
           return
         }
+        // A requested id is authoritative. Never substitute another stored
+        // conversation when the requested snapshot is missing.
+        setError(`Conversation ${conversationId} is unavailable for preview`)
+        setLoading(false)
+        return
       }
 
       // Fallback: try to get active conversation
@@ -151,7 +166,10 @@ export default function Preview() {
       const conversationKey = Object.keys(allItems).find(k => k.startsWith('conversation-'))
 
       if (conversationKey) {
-        setConversation(allItems[conversationKey] as Conversation)
+        const conv = allItems[conversationKey] as Conversation
+        setConversation(conv)
+        const integrity = analyzeConversationIntegrity(conv)
+        setIntegrityWarning(isConversationComplete(conv) ? null : conversationIntegrityError(integrity))
       } else {
         setError('No conversation to preview')
       }
@@ -170,9 +188,12 @@ export default function Preview() {
     setMarkdownContent(
       conversationToMarkdown(conversation, {
         format: 'markdown',
-        includeMetadata: true,
-        includeCodeBlocks: true,
-        includeImages: true
+        includeMetadata: settings.includeMetadata,
+        includeCodeBlocks: settings.includeCodeBlocks,
+        includeImages: settings.includeImages,
+        exportArtifacts: settings.exportArtifacts,
+        includeUploadedFiles: settings.includeUploadedFiles,
+        filenamePattern: settings.filenamePattern
       })
     )
   }
@@ -200,18 +221,37 @@ export default function Preview() {
   /**
    * Download markdown content as file
    */
-  const downloadContent = () => {
-    const filename = `${conversation?.title || 'conversation'}.md`
+  const downloadContent = async () => {
+    if (!conversation || !isConversationComplete(conversation)) {
+      setFeedback(conversation ? conversationIntegrityError(analyzeConversationIntegrity(conversation)) : 'Conversation is unavailable')
+      return
+    }
+    const filename = `${conversation.title || 'conversation'}.md`
     const blob = new Blob([markdownContent], { type: 'text/markdown' })
     const url = URL.createObjectURL(blob)
-
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    try {
+      const baseFilename = settings.filenamePattern
+        ? generateFilename(settings.filenamePattern, conversation)
+        : filename.replace(/\.md$/i, '')
+      const downloadFilename = buildDownloadFilename(
+        baseFilename,
+        conversation.platform,
+        '.md',
+        settings.downloadFolder,
+        settings.customFolderName
+      )
+      await downloadAndWait({ url, filename: downloadFilename, saveAs: false })
+      const finalized = await chrome.runtime.sendMessage({
+        type: 'EXPORT_REQUEST',
+        data: { conversation, format: 'markdown', filename: downloadFilename }
+      })
+      if (finalized?.error) throw new Error(finalized.error)
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : 'Download failed')
+      return
+    } finally {
+      URL.revokeObjectURL(url)
+    }
     setFeedback('Downloaded!')
     setTimeout(() => setFeedback(null), 2000)
   }
@@ -326,6 +366,11 @@ export default function Preview() {
 
       {/* Content area */}
       <div className="preview-body">
+        {integrityWarning && (
+          <div className="message error" role="alert" style={{ marginBottom: '16px' }}>
+            {integrityWarning}
+          </div>
+        )}
         {mode === 'rendered' && conversation && (
           <div className="preview-message-list">
             {conversation.messages.map((msg) => (

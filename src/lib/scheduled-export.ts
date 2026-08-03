@@ -9,6 +9,30 @@ import type {
   ScheduledExportSettings,
 } from './types'
 
+export interface ScheduledRunSummary {
+  attempted: number
+  exported: number
+  failed: number
+  skipped: number
+  listComplete: boolean
+  systemError?: boolean
+}
+
+export type ScheduledRunStatus = 'success' | 'partial' | 'failed' | 'skipped'
+
+/** Classify a run without conflating "some files downloaded" with success. */
+export function classifyScheduledRun(summary: ScheduledRunSummary): ScheduledRunStatus {
+  if (summary.systemError || !summary.listComplete) return 'failed'
+  if (summary.attempted === 0 && summary.skipped > 0) return 'skipped'
+  if (summary.failed > 0) return summary.exported > 0 ? 'partial' : 'failed'
+  return 'success'
+}
+
+/** `lastRun` advances only after a complete scan and zero export failures. */
+export function shouldAdvanceScheduledLastRun(summary: ScheduledRunSummary): boolean {
+  return classifyScheduledRun(summary) === 'success' || classifyScheduledRun(summary) === 'skipped'
+}
+
 /** Frequency-to-millisecond mapping */
 const FREQUENCY_INTERVALS: Record<ScheduleFrequency, number> = {
   hourly: 60 * 60 * 1000,

@@ -4,6 +4,7 @@
 
 import type { Conversation, ExportOptions, ChatMessage } from './types'
 import { cleanText } from './dom-utils'
+import { downloadAndWait } from './download-completion'
 
 // Dynamic imports for jspdf and html2canvas
 let jsPDFModule: any = null
@@ -122,11 +123,28 @@ function generateMessageHtml(message: ChatMessage, options: ExportOptions): stri
   }
   
   // Add images
-  if (options.includeImages && message.attachments?.length) {
-    const images = message.attachments.filter(a => a.type === 'image')
+  if (message.attachments?.length) {
+    const attachments = message.attachments.filter(a =>
+      !(options.includeUploadedFiles === false && a.uploaded === true && a.type !== 'image')
+    )
+    const images = options.includeImages ? attachments.filter(a => a.type === 'image') : []
     images.forEach(img => {
       content += `<div class="image"><img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.name || 'Image')}" /></div>\n`
     })
+
+    const otherAttachments = attachments.filter(a => a.type !== 'image')
+    if (otherAttachments.length > 0) {
+      content += '<div class="attachments"><strong>Attachments:</strong><ul>'
+      for (const attachment of otherAttachments) {
+        const name = escapeHtml(attachment.name || attachment.url || 'Attachment')
+        const rawUrl = attachment.url.trim()
+        const safeUrl = /^(https?:|mailto:)/i.test(rawUrl) ? escapeHtml(rawUrl) : ''
+        content += safeUrl
+          ? `<li><a href="${safeUrl}">${name}</a></li>`
+          : `<li>${name}</li>`
+      }
+      content += '</ul></div>\n'
+    }
   }
   
   return `\n    <div class="message ${roleClass}" style="page-break-inside: avoid;">\n      <div class="role">${roleLabel}${authorInfo}</div>\n      ${content}\n    </div>`
@@ -157,7 +175,9 @@ function generateArtifactsHtml(conversation: Conversation, options: ExportOption
 
   for (const message of conversation.messages) {
     for (const att of message.attachments || []) {
-      if (att.url && att.type !== 'image') add(att.name || att.url, att.url)
+      if (att.url && att.type !== 'image' && !(options.includeUploadedFiles === false && att.uploaded === true)) {
+        add(att.name || att.url, att.url)
+      }
     }
   }
 
@@ -868,14 +888,14 @@ export async function exportToPdf(
   
   try {
     // Auto-download using chrome.downloads API
-    await chrome.downloads.download({
+    await downloadAndWait({
       url,
       filename,
       saveAs: false
     })
   } finally {
     // Clean up object URL
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    URL.revokeObjectURL(url)
   }
 }
 

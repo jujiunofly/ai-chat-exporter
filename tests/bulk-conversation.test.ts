@@ -2,11 +2,21 @@ import { describe, expect, it } from 'vitest'
 import { hasUsableConversation } from '../src/lib/bulk-conversation'
 
 describe('bulk conversation validation', () => {
-  it('accepts a content-bearing conversation whose Gemini ID differs only by c_ prefix', () => {
+  it('accepts a complete conversation whose Gemini ID differs only by c_ prefix', () => {
+    expect(hasUsableConversation({
+      id: 'abc123',
+      messages: [
+        { id: 'm0', role: 'user', content: 'Question' },
+        { id: 'm1', role: 'assistant', content: 'Real answer' }
+      ]
+    }, 'c_abc123')).toBe(true)
+  })
+
+  it('rejects assistant-only conversations as incomplete', () => {
     expect(hasUsableConversation({
       id: 'abc123',
       messages: [{ id: 'm1', role: 'assistant', content: 'Real answer' }]
-    }, 'c_abc123')).toBe(true)
+    }, 'abc123')).toBe(false)
   })
 
   it('rejects a content-bearing conversation from a different tab', () => {

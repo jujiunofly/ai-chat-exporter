@@ -1,4 +1,5 @@
 import type { Conversation } from './types'
+import { isConversationComplete } from './conversation-integrity'
 
 function normalizeConversationId(id: string): string {
   return id.replace(/^c_/, '')
@@ -17,7 +18,5 @@ export function hasUsableConversation(
     return false
   }
 
-  return Array.isArray(conversation.messages) && conversation.messages.some(
-    message => typeof message.content === 'string' && message.content.trim().length > 0
-  )
+  return isConversationComplete(conversation as Conversation)
 }

@@ -1,4 +1,5 @@
 import type { Conversation } from './types'
+import { analyzeConversationIntegrity } from './conversation-integrity'
 
 /**
  * Decide whether a DOM-parsed conversation is likely incomplete and should be
@@ -8,18 +9,12 @@ import type { Conversation } from './types'
  * assistant output lives in a virtualized/artifact tree. Returning that partial
  * DOM result causes exports with one user message and no AI response.
  */
-function hasAssistantContent(conversation: Conversation | null | undefined): boolean {
-  if (!conversation || !Array.isArray(conversation.messages)) return false
-  return conversation.messages.some(
-    message => message.role === 'assistant' && message.content.trim().length > 0
-  )
+export function hasAssistantContent(conversation: Conversation | null | undefined): boolean {
+  return analyzeConversationIntegrity(conversation).assistantCount > 0
 }
 
 export function shouldUseApiFallback(conversation: Conversation | null | undefined): boolean {
-  if (!conversation) return true
-  if (!Array.isArray(conversation.messages) || conversation.messages.length === 0) return true
-
-  return !hasAssistantContent(conversation)
+  return analyzeConversationIntegrity(conversation).shouldAttemptFallback
 }
 
 export function preferMoreCompleteConversation<T extends Conversation | null | undefined>(
@@ -29,13 +24,20 @@ export function preferMoreCompleteConversation<T extends Conversation | null | u
   if (!apiConversation) return domConversation
   if (!domConversation) return apiConversation
 
-  const domHasAssistant = hasAssistantContent(domConversation)
-  const apiHasAssistant = hasAssistantContent(apiConversation)
+  const domIntegrity = analyzeConversationIntegrity(domConversation)
+  const apiIntegrity = analyzeConversationIntegrity(apiConversation)
+  const domHasAssistant = domIntegrity.assistantCount > 0
+  const apiHasAssistant = apiIntegrity.assistantCount > 0
 
   if (domHasAssistant && !apiHasAssistant) return domConversation
   if (!domHasAssistant && apiHasAssistant) return apiConversation
 
-  return apiConversation.messages.length >= domConversation.messages.length
-    ? apiConversation
-    : domConversation
+  // Prefer the result with more usable content, not a branch-expanded result
+  // that is merely longer. Assistant/user counts are weighted before raw
+  // message count so a user-only DOM cannot beat a complete API response.
+  const domScore = domIntegrity.assistantCount * 4 + domIntegrity.userCount * 2 + domIntegrity.nonEmptyContentCount
+  const apiScore = apiIntegrity.assistantCount * 4 + apiIntegrity.userCount * 2 + apiIntegrity.nonEmptyContentCount
+  if (apiScore !== domScore) return apiScore > domScore ? apiConversation : domConversation
+
+  return apiConversation.messages.length >= domConversation.messages.length ? apiConversation : domConversation
 }

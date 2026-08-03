@@ -9,10 +9,38 @@ import { generateId, extractTextContent, extractCodeBlocks, extractImages, clean
 import { preferMoreCompleteConversation } from '../lib/parser-fallback'
 import { extractApiMessageText, getApiMessageRecords, normalizeApiMessageRole } from '../lib/api-message-normalizer'
 
+export interface DeepSeekHistoryPage {
+  items: any[]
+  nextCursor?: string
+  hasMore: boolean
+}
+
+/** Normalize the several history response envelopes seen in DeepSeek builds. */
+export function parseDeepSeekHistoryPage(data: any): DeepSeekHistoryPage {
+  const envelope = data?.data && !Array.isArray(data.data) ? data.data : data
+  const rawItems = Array.isArray(envelope)
+    ? envelope
+    : envelope?.items || envelope?.conversations || envelope?.chat_sessions || envelope?.chat_session || envelope?.data || []
+  const items = Array.isArray(rawItems) ? rawItems : []
+  const nextCursor = [
+    envelope?.next_cursor,
+    envelope?.nextCursor,
+    envelope?.next_page_token,
+    envelope?.nextPageToken,
+    envelope?.cursor,
+  ].find(value => typeof value === 'string' && value.length > 0)
+  const explicitHasMore = envelope?.has_more ?? envelope?.hasMore ?? envelope?.has_next_page
+  return {
+    items,
+    nextCursor,
+    hasMore: typeof explicitHasMore === 'boolean' ? explicitHasMore : Boolean(nextCursor),
+  }
+}
+
 /**
  * DeepSeek parser implementation
  */
-class DeepSeekParser implements PlatformParser {
+export class DeepSeekParser implements PlatformParser {
   platform = 'deepseek' as const
 
   /**
@@ -90,43 +118,60 @@ class DeepSeekParser implements PlatformParser {
   async fetchAllConversations(): Promise<ConversationListItem[]> {
     const conversations: ConversationListItem[] = []
     const seen = new Set<string>()
+    let paginationFailed = false
 
     try {
       // Try to fetch conversation history from the sidebar/API
       // DeepSeek may expose an API at /api/v0/chat/history or similar
-      const response = await fetch('https://chat.deepseek.com/api/v0/chat/history', {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/json'
-        }
-      })
+      const maxPages = 100
+      let cursor = ''
+      let offset = 0
+      const seenCursors = new Set<string>()
+      for (let page = 0; page < maxPages; page++) {
+        const query = new URLSearchParams()
+        if (cursor) query.set('cursor', cursor)
+        else if (offset > 0) query.set('offset', String(offset))
+        query.set('limit', '100')
+        const response = await fetch(`https://chat.deepseek.com/api/v0/chat/history?${query.toString()}`, {
+          method: 'GET',
+          credentials: 'include',
+          headers: { 'Accept': 'application/json' }
+        })
+        if (!response.ok) throw new Error(`DeepSeek history request failed: ${response.status}`)
 
-      if (response.ok) {
-        const data = await response.json()
-        const items = data.data || data.items || data.conversations || []
-
-        for (const item of items) {
-          const id = item.chat_session_id || item.id
+        const pageData = parseDeepSeekHistoryPage(await response.json())
+        for (const item of pageData.items) {
+          const id = item?.chat_session_id || item?.id
+          if (typeof id !== 'string' || !id || seen.has(id)) continue
           const title = item.title || item.name || 'Untitled Conversation'
-          if (!seen.has(id)) {
-            seen.add(id)
-            conversations.push({
-              id,
-              title,
-              url: `https://chat.deepseek.com/a/chat/s/${id}`,
-              platform: 'deepseek',
-              createdAt: item.created_at ? new Date(item.created_at).getTime() : undefined
-            })
-          }
+          seen.add(id)
+          conversations.push({
+            id,
+            title,
+            url: `https://chat.deepseek.com/a/chat/s/${id}`,
+            platform: 'deepseek',
+            createdAt: item.created_at ? new Date(item.created_at).getTime() : undefined
+          })
         }
+
+        if (!pageData.hasMore || pageData.items.length === 0) break
+        if (pageData.nextCursor) {
+          if (seenCursors.has(pageData.nextCursor)) throw new Error('DeepSeek history pagination cursor repeated')
+          seenCursors.add(pageData.nextCursor)
+          cursor = pageData.nextCursor
+        } else {
+          offset += pageData.items.length
+        }
+        if (page === maxPages - 1) throw new Error('DeepSeek history pagination exceeded safe page limit')
       }
     } catch (error) {
+      paginationFailed = true
       console.error('[DeepSeek Parser] Error fetching conversations:', error)
     }
 
-    // Fallback to DOM-based sidebar list
-    if (conversations.length === 0) {
+    // Never present a partially paginated API response as the complete list.
+    // The visible sidebar is a conservative fallback when pagination fails.
+    if (paginationFailed || conversations.length === 0) {
       return this.getConversationList()
     }
 
@@ -218,33 +263,32 @@ class DeepSeekParser implements PlatformParser {
         }
       })
     } else {
-      // Fallback: try class-based message containers
-      const classSelectors = [
-        '[class*="message-user"]',
-        '[class*="message-assistant"]',
-        '[class*="ds-message"]',
-        '[class*="chat-message"]'
-      ]
-
-      for (const selector of classSelectors) {
-        const elements = document.querySelectorAll(selector)
-        elements.forEach(element => {
-          if (seenElements.has(element)) return
-          seenElements.add(element)
-          const role = this.determineRoleFromClass(element)
-          if (role) {
-            const content = this.extractMessageContent(element)
-            if (content.trim()) {
-              messages.push({
-                id: generateId(),
-                role,
-                content,
-              })
-            }
-          }
+      // Fallback: query user and assistant candidates together. Running one
+      // selector at a time used to stop after the first user node and silently
+      // drop every assistant response. querySelectorAll preserves DOM order.
+      const classCandidates = Array.from(document.querySelectorAll(
+        '[class*="message-user"], [class*="message-assistant"], ' +
+        '[class*="ds-message"], [class*="chat-message"], [class*="turn"]'
+      ))
+      classCandidates.forEach(element => {
+        if (seenElements.has(element)) return
+        // Do not parse a generic wrapper when it contains a more specific
+        // role-bearing candidate; that would duplicate the transcript.
+        const specificChild = element.querySelector(
+          '[class*="message-user"], [class*="message-assistant"]'
+        )
+        if (specificChild && !element.matches('[class*="message-user"], [class*="message-assistant"]')) return
+        seenElements.add(element)
+        const role = this.determineRoleFromElement(element) || this.determineRoleFromClass(element)
+        if (!role) return
+        const content = this.extractMessageContent(element)
+        if (!content.trim()) return
+        messages.push({
+          id: element.getAttribute('data-message-id') || generateId(),
+          role,
+          content,
         })
-        if (messages.length > 0) break
-      }
+      })
 
       // Final fallback: look for generic message containers
       if (messages.length === 0) {

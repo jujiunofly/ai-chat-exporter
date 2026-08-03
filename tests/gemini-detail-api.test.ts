@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { GeminiParser } from '../src/contents/gemini-parser'
+import { GeminiParser, selectGeminiCredential } from '../src/contents/gemini-parser'
 
 const credentials: Record<string, any> = {
   gemini_credentials: {
@@ -55,6 +55,15 @@ describe('Gemini detail API parser', () => {
       },
       runtime: { getURL: vi.fn((path: string) => `chrome-extension://test/${path}`) }
     }
+  })
+
+  it('selects the newest credential for the active account slot', () => {
+    expect(selectGeminiCredential({
+      old: { at: 'old-token', sid: 'old-session', accountSlot: 'u1', lastUsed: 10 },
+      newest: { at: 'new-token', sid: 'new-session', accountSlot: 'u1', lastUsed: 20 },
+      other: { at: 'other-token', sid: 'other-session', accountSlot: 'u2', lastUsed: 30 },
+    }, 'u1')).toMatchObject({ at: 'new-token', sid: 'new-session' })
+    expect(selectGeminiCredential({ other: { at: 'other-token', accountSlot: 'u2' } }, 'u1')).toBeNull()
   })
 
   it('uses the current detail RPC and extracts only the four typed turn fields', async () => {

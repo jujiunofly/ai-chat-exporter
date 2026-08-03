@@ -13,7 +13,7 @@ import { fetchGrokConversationDetail, fetchGrokConversationList } from '../lib/g
 /**
  * Grok parser implementation
  */
-class GrokParser implements PlatformParser {
+export class GrokParser implements PlatformParser {
   platform = 'grok' as const
 
   /**
@@ -119,33 +119,30 @@ class GrokParser implements PlatformParser {
         }
       })
     } else {
-      // Fallback: try class-based message containers
-      const classSelectors = [
-        '[class*="message-user"]',
-        '[class*="message-assistant"]',
-        '[class*="message"]',
-        '[class*="turn"]'
-      ]
-
-      for (const selector of classSelectors) {
-        const elements = document.querySelectorAll(selector)
-        elements.forEach(element => {
-          if (seenElements.has(element)) return
-          seenElements.add(element)
-          const role = this.determineRoleFromElement(element)
-          if (role) {
-            const content = this.extractMessageContent(element)
-            if (content.trim()) {
-              messages.push({
-                id: generateId(),
-                role,
-                content,
-              })
-            }
-          }
+      // Query all role-bearing candidates in one pass. A user-first selector
+      // loop can return a non-empty user result and then break before Grok's
+      // assistant nodes are visited.
+      const classCandidates = Array.from(document.querySelectorAll(
+        '[class*="message-user"], [class*="message-assistant"], ' +
+        '[class*="message"], [class*="turn"]'
+      ))
+      classCandidates.forEach(element => {
+        if (seenElements.has(element)) return
+        const specificChild = element.querySelector(
+          '[class*="message-user"], [class*="message-assistant"]'
+        )
+        if (specificChild && !element.matches('[class*="message-user"], [class*="message-assistant"]')) return
+        seenElements.add(element)
+        const role = this.determineRoleFromElement(element)
+        if (!role) return
+        const content = this.extractMessageContent(element)
+        if (!content.trim()) return
+        messages.push({
+          id: element.getAttribute('data-message-id') || generateId(),
+          role,
+          content,
         })
-        if (messages.length > 0) break
-      }
+      })
     }
 
     return messages

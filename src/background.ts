@@ -21,13 +21,22 @@ import { generateFilename } from './lib/filename'
 import { buildDownloadFilename } from './lib/download-path'
 import { textToDataUrl } from './lib/download-url'
 import { hasUsableConversation } from './lib/bulk-conversation'
+import { downloadAndWait } from './lib/download-completion'
+import { isConversationComplete } from './lib/conversation-integrity'
 import {
   getDefaultScheduledExportSettings,
   isDueForRun,
   delay,
   PLATFORM_URLS,
   ALL_PLATFORMS,
+  shouldAdvanceScheduledLastRun,
 } from './lib/scheduled-export'
+
+// A module-level single-flight guard closes the async gap between checking
+// storage and setting the per-platform status. The storage status remains the
+// restart-visible diagnostic; this guard prevents duplicate runs in one
+// service-worker lifetime.
+let scheduledRunPromise: Promise<void> | null = null
 
 // Default settings
 const _DEFAULT_SETTINGS: ExtensionSettings = DEFAULT_SETTINGS
@@ -84,7 +93,7 @@ async function handleMessage(
       return handleSettingsUpdated(message.data as ExtensionSettings)
     
     case 'EXPORT_REQUEST':
-      return handleExportRequest(message.data as { conversation: Conversation; format: string }, sender)
+      return handleExportRequest(message.data as { conversation: Conversation; format: string; filename?: string }, sender)
     
     case 'DETECT_PLATFORM':
       return handleDetectPlatform(sender)
@@ -146,11 +155,11 @@ async function handleSettingsUpdated(
  * Handle export request from popup
  */
 async function handleExportRequest(
-  data: { conversation: Conversation; format: string },
+  data: { conversation: Conversation; format: string; filename?: string },
   sender: chrome.runtime.MessageSender
 ): Promise<{ data?: string; error?: string }> {
   try {
-    if (!data.conversation) {
+    if (!data.conversation || !isConversationComplete(data.conversation)) {
       return { error: 'No conversation data provided' }
     }
     
@@ -159,13 +168,13 @@ async function handleExportRequest(
       [`export-${conversationId}`]: { ...data.conversation, timestamp: Date.now() }
     })
 
-    // Track this export so bulk export won't re-download it
+    // Track this completed export so scheduled scans can deduplicate it.
     await markAsExported({
       id: conversationId,
       platform: data.conversation.platform,
       title: data.conversation.title,
       exportedAt: Date.now(),
-      filename: '',
+      filename: data.filename || '',
     })
     
     return { data: conversationId }
@@ -324,16 +333,9 @@ async function getScheduledExportSettings(): Promise<ScheduledExportSettings> {
  */
 async function handleScheduledExportRun(): Promise<{ data?: boolean; error?: string }> {
   try {
-    // Prevent running if already running
-    const statusResult = await chrome.storage.local.get('scheduledExportStatus')
-    const currentStatus = statusResult.scheduledExportStatus as ScheduledExportStatus | undefined
-    if (currentStatus?.isRunning) {
-      return { error: 'Scheduled export already running' }
-    }
-
     // A user-triggered run must not be held back by the next scheduled due
     // time (or by the global schedule toggle).
-    void checkAndRunScheduledExports(true)
+    if (!startScheduledExport(true)) return { error: 'Scheduled export already running' }
     return { data: true }
   } catch (err) {
     return { error: (err as Error).message }
@@ -398,7 +400,7 @@ async function handleClearExportHistory(): Promise<{ data?: boolean; error?: str
 // Handle alarms
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'scheduled-export-check') {
-    await checkAndRunScheduledExports()
+    startScheduledExport(false)
   }
   if (alarm.name !== 'cleanup-exports') return
   try {
@@ -428,7 +430,7 @@ async function checkAndRunScheduledExports(force = false): Promise<void> {
   // Prevent concurrent runs
   const statusResult = await chrome.storage.local.get('scheduledExportStatus')
   const currentStatus = statusResult.scheduledExportStatus as ScheduledExportStatus | undefined
-  if (currentStatus?.isRunning) return
+  if (currentStatus?.isRunning && currentStatus.lastRunAt && Date.now() - currentStatus.lastRunAt < 2 * 60 * 60 * 1000) return
 
   const now = Date.now()
   let remainingBudget = config.maxTotalPerRun
@@ -452,6 +454,20 @@ async function checkAndRunScheduledExports(force = false): Promise<void> {
       }
     }
   }
+}
+
+function startScheduledExport(force: boolean): boolean {
+  if (scheduledRunPromise) return false
+  scheduledRunPromise = checkAndRunScheduledExports(force)
+    .catch(error => {
+      // Keep the service worker promise handled while retaining a diagnostic
+      // that does not include conversation text or credentials.
+      console.error('[Scheduled Export] Run failed:', error instanceof Error ? error.message : 'unknown error')
+    })
+    .finally(() => {
+      scheduledRunPromise = null
+    })
+  return true
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -521,28 +537,38 @@ async function getExportedIds(platform: ExportablePlatform): Promise<Set<string>
   return new Set(ids)
 }
 
-/** Mark a conversation as exported */
+let exportHistoryQueue: Promise<void> = Promise.resolve()
+
+/** Mark a conversation as exported after serializing storage updates. */
 async function markAsExported(record: ExportedConversationRecord): Promise<void> {
-  const key = `exportedIds-${record.platform}`
-  const statusKey = `exportedRecord-${record.platform}-${record.id}`
+  let release!: () => void
+  const turn = new Promise<void>(resolve => { release = resolve })
+  const previous = exportHistoryQueue
+  exportHistoryQueue = previous.then(() => turn)
+  await previous
+  try {
+    const key = `exportedIds-${record.platform}`
+    const statusKey = `exportedRecord-${record.platform}-${record.id}`
 
-  // Add ID to the exported IDs list
-  const result = await chrome.storage.local.get(key)
-  const ids: string[] = result[key] || []
-  if (!ids.includes(record.id)) {
-    ids.push(record.id)
-    // Keep only last 500 IDs per platform to prevent unbounded growth
-    const evictedIds = ids.length > 500 ? ids.splice(0, ids.length - 500) : []
-    await chrome.storage.local.set({ [key]: ids })
-    if (evictedIds.length > 0) {
-      await chrome.storage.local.remove(
-        evictedIds.map(id => `exportedRecord-${record.platform}-${id}`)
-      )
+    const result = await chrome.storage.local.get(key)
+    const ids: string[] = Array.isArray(result[key]) ? [...result[key]] : []
+    if (!ids.includes(record.id)) {
+      ids.push(record.id)
+      // Keep only last 500 IDs per platform to prevent unbounded growth
+      const evictedIds = ids.length > 500 ? ids.splice(0, ids.length - 500) : []
+      await chrome.storage.local.set({ [key]: ids })
+      if (evictedIds.length > 0) {
+        await chrome.storage.local.remove(
+          evictedIds.map(id => `exportedRecord-${record.platform}-${id}`)
+        )
+      }
     }
-  }
 
-  // Store the full record for status/history display
-  await chrome.storage.local.set({ [statusKey]: record })
+    // Store the full record for status/history display
+    await chrome.storage.local.set({ [statusKey]: record })
+  } finally {
+    release()
+  }
 }
 
 /** Clear all exported history for a platform (or all platforms) */
@@ -637,7 +663,7 @@ async function runScheduledExportForPlatform(
         })
 
         const conversation: Conversation | null = detailResponse?.data || null
-        if (!conversation || conversation.messages.length === 0) {
+        if (!hasUsableConversation(conversation, convItem.id)) {
           failed++
           continue
         }
@@ -645,9 +671,13 @@ async function runScheduledExportForPlatform(
         // Rate limiting delay between requests
         await delay(config.requestDelayMs)
 
-        // Export as markdown
+        // Export using the configured scheduled format.
+        const exportFormat = platformConfig.format || config.defaultFormat
+        if (exportFormat !== 'markdown') {
+          throw new Error('Scheduled PDF export is not available in the background worker')
+        }
         const exportOptions: ExportOptions = {
-          format: 'markdown',
+          format: exportFormat,
           includeMetadata: true,
           includeCodeBlocks: true,
           includeImages: true,
@@ -666,10 +696,9 @@ async function runScheduledExportForPlatform(
           ''
         )
 
-        // Download
+        // Download and wait for browser completion before writing history.
         const url = textToDataUrl(markdown, 'text/markdown')
-
-        await chrome.downloads.download({ url, filename, saveAs: false })
+        await downloadAndWait({ url, filename, saveAs: false })
 
         // Track exported conversation
         await markAsExported({
@@ -693,7 +722,16 @@ async function runScheduledExportForPlatform(
     status.lastRunExported = exported
     status.lastRunFailed = failed
     await chrome.storage.local.set({ scheduledExportStatus: status })
-    return { processed: exported + failed, succeeded: true }
+    return {
+      processed: exported + failed,
+      succeeded: shouldAdvanceScheduledLastRun({
+        attempted: exported + failed,
+        exported,
+        failed,
+        skipped: Math.max(0, newConversations.length - toExport.length),
+        listComplete: true,
+      }),
+    }
 
   } catch (err) {
     console.error(`[Scheduled Export] Platform ${platform} failed:`, err)

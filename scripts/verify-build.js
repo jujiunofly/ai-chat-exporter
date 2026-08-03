@@ -82,6 +82,9 @@ function verifyIcons() {
 
 assert(manifest.version === pkg.version, 'Built version does not match package.json')
 assert(!manifest.permissions?.includes('tabs'), 'The broad tabs permission must not return')
+const contentScriptMatches = (manifest.content_scripts || []).flatMap(script => script.matches || [])
+assert(contentScriptMatches.includes('https://chatgpt.com/*'), 'ChatGPT content script match is missing')
+assert(contentScriptMatches.includes('https://chat.openai.com/*'), 'Legacy ChatGPT content script match is missing')
 verifyIcons()
 verifyFullPage('options.html', ['grid-template-columns:repeat(12,minmax(0,1fr))'])
 verifyFullPage(path.join('tabs', 'preview.html'), [])

@@ -137,7 +137,7 @@ function formatMessage(
   }
   
   // Add images if enabled
-  if (options.includeImages && message.attachments?.length) {
+  if (message.attachments?.length) {
     // When includeUploadedFiles is OFF, drop references to FILES the user
     // uploaded into the chat — but NEVER strip genuine images, which are
     // conversational content (fixes the previous bug where every image was
@@ -149,7 +149,7 @@ function formatMessage(
         : true
     const attachments = message.attachments.filter(uploadedFilter)
 
-    const images = attachments.filter(a => a.type === 'image')
+    const images = options.includeImages ? attachments.filter(a => a.type === 'image') : []
     if (images.length > 0) {
       lines.push('')
       images.forEach(img => {

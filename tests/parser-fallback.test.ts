@@ -39,6 +39,12 @@ describe('parser API fallback decision', () => {
     ]))).toBe(false)
   })
 
+  it('falls back when DOM contains assistant content but no user message', () => {
+    expect(shouldUseApiFallback(conv([
+      { id: 'a1', role: 'assistant', content: 'Answer without prompt' }
+    ]))).toBe(true)
+  })
+
   it('prefers API conversation when it has more messages than partial DOM result', () => {
     const dom = conv([{ id: 'u1', role: 'user', content: 'Question' }])
     const api = conv([

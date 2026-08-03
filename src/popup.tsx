@@ -18,6 +18,8 @@ import { conversationToMarkdown, generateMarkdownFilename } from './lib/export-m
 import { exportToPdf } from './lib/export-pdf'
 import { generateFilename } from './lib/filename'
 import { buildDownloadFilename } from './lib/download-path'
+import { downloadAndWait } from './lib/download-completion'
+import { analyzeConversationIntegrity, conversationIntegrityError, isConversationComplete } from './lib/conversation-integrity'
 import { t, type Locale } from './lib/i18n'
 import type { 
   Conversation, ExportFormat, ExtensionSettings, ConversationListItem, 
@@ -282,6 +284,12 @@ export default function Popup() {
       return
     }
 
+    const integrity = analyzeConversationIntegrity(conversation)
+    if (!isConversationComplete(conversation)) {
+      setError(conversationIntegrityError(integrity))
+      return
+    }
+
     // Ensure conversation has a meaningful title for filename generation
     let exportConversation = conversation
     if (!conversation.title || 
@@ -345,18 +353,27 @@ export default function Popup() {
         const blob = new Blob([markdown], { type: 'text/markdown' })
         const url = URL.createObjectURL(blob)
         
-        await chrome.downloads.download({
+        await downloadAndWait({
           url,
           filename,
           saveAs: false
         })
-        
-        setTimeout(() => URL.revokeObjectURL(url), 1000)
+        URL.revokeObjectURL(url)
+        const finalized = await chrome.runtime.sendMessage({
+          type: 'EXPORT_REQUEST',
+          data: { conversation: exportConversation, format, filename }
+        })
+        if (finalized?.error) throw new Error(finalized.error)
         setSuccess(T('Exported as Markdown!'))
         clearSuccess()
       } else {
         const filename = buildDownloadFilename(baseFilename, exportConversation.platform, '.pdf', downloadFolder, customFolderName)
         await exportToPdf(exportConversation, exportOptions, filename)
+        const finalized = await chrome.runtime.sendMessage({
+          type: 'EXPORT_REQUEST',
+          data: { conversation: exportConversation, format, filename }
+        })
+        if (finalized?.error) throw new Error(finalized.error)
         setSuccess(T('PDF exported successfully!'))
         clearSuccess()
       }
@@ -479,6 +496,10 @@ export default function Popup() {
             throw new Error(`Could not load real content for ${convItem.title || 'this conversation'}`)
           }
           const conv = result.conversation
+          const integrity = analyzeConversationIntegrity(conv)
+          if (!isConversationComplete(conv)) {
+            throw new Error(conversationIntegrityError(integrity))
+          }
 
           const baseFilename = settings?.filenamePattern
             ? generateFilename(settings.filenamePattern, conv, i + 1)
@@ -490,17 +511,24 @@ export default function Popup() {
             const blob = new Blob([markdown], { type: 'text/markdown' })
             const url = URL.createObjectURL(blob)
             
-            await chrome.downloads.download({
+            await downloadAndWait({
               url,
               filename,
               saveAs: false
             })
-            
-            setTimeout(() => URL.revokeObjectURL(url), 1000)
+            URL.revokeObjectURL(url)
           } else {
             const filename = buildDownloadFilename(baseFilename, conv.platform, '.pdf', downloadFolder, customFolderName)
             await exportToPdf(conv, exportOptions, filename)
           }
+
+          const finalized = await chrome.runtime.sendMessage({
+            type: 'EXPORT_REQUEST',
+            data: { conversation: conv, format, filename: format === 'markdown'
+              ? buildDownloadFilename(baseFilename, conv.platform, '.md', downloadFolder, customFolderName)
+              : buildDownloadFilename(baseFilename, conv.platform, '.pdf', downloadFolder, customFolderName) }
+          })
+          if (finalized?.error) throw new Error(finalized.error)
 
           setBulkProgress(prev => ({
             ...prev,
