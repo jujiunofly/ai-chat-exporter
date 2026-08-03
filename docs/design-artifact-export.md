@@ -1,7 +1,7 @@
 # Design: Artifact Export Options for AI Chat Exporter
 
 **Date:** 2026-07-08  
-**Status:** Round 1 proposal — no files modified  
+**Status:** Round 1 proposal — embed subset implemented; separate-file modes remain future work
 **Scope:** How generated artifacts (code, HTML, documents) extracted from conversations are exported alongside the main conversation file.
 
 ---
@@ -14,16 +14,19 @@
 | `ConversationArtifact` type (`code`, `document`, `image`, `html`) | ✅ Defined in `types.ts:50-61` |
 | `Conversation.artifacts?: ConversationArtifact[]` | ✅ Field exists |
 | `ExtensionSettings.exportArtifacts: boolean` (default `true`) | ✅ Persisted setting |
-| Options page toggle "Export Artifacts" | ✅ Present but **does nothing** — it's a dead toggle |
+| Options page toggle "Export Artifacts" | ✅ Controls embedded Artifact output |
 | Claude parser extracts artifacts from `tool_use` blocks | ✅ Working |
 | Other parsers (ChatGPT, Gemini, DeepSeek, Grok) | ⚠️ Do not extract artifacts yet |
-| `conversationToMarkdown()` | ❌ Ignores `conversation.artifacts` entirely |
-| `conversationToHtml()` | ❌ Ignores artifacts entirely |
-| Popup export flow (`handleExport`) | ❌ Never downloads artifact files |
-| Scheduled/bulk export flow | ❌ Never downloads artifact files |
+| `conversationToMarkdown()` | ✅ Embeds Artifact metadata/content when enabled |
+| `conversationToHtml()` | ✅ Embeds escaped Artifact metadata/content when enabled |
+| Preview rendered/Markdown modes | ✅ Show embedded Artifact output when enabled |
+| Separate Artifact files in popup/scheduled/bulk export | ⏳ Not implemented |
 
-### The gap
-Artifacts are parsed and stored on the `Conversation` object but the entire export pipeline silently discards them. The `exportArtifacts` setting is a dead toggle.
+### Remaining gap
+The current boolean setting implements the safe single-file/embed behavior. The
+proposed `embed`/`separate`/`both`/`skip` mode migration and individual Artifact
+downloads remain future work. Until then, the setting must not be described as
+downloading separate files.
 
 ---
 
