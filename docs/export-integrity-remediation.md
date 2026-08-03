@@ -6,7 +6,7 @@ contains no conversation content, credentials, cookies, or account identifiers.
 | Area | Status | Code/tests | Live status |
 | --- | --- | --- | --- |
 | Shared conversation completeness | Implemented | `src/lib/conversation-integrity.ts`, `tests/conversation-integrity.test.ts` | Fixture only |
-| Claude DOM assistant extraction | Implemented | `src/contents/claude-parser.ts`, `tests/claude-parser-live-regression.test.ts` | Not live-tested |
+| Claude DOM/API rich-text extraction | Implemented | `src/contents/claude-parser.ts`, `src/lib/claude-rich-text.ts`, `tests/claude-rich-text.test.ts`, `tests/claude-parser-live-regression.test.ts` | Not live-tested |
 | Claude active tree branch | Implemented | `selectClaudeActiveBranch` and branch fixtures | Not live-tested |
 | ChatGPT legacy host injection | Implemented | content-script match and manifest verification | Chrome/Firefox live test pending |
 | DeepSeek/Grok DOM fallback | Implemented | `tests/provider-dom-fallback-live.test.ts` | Not live-tested |
@@ -33,3 +33,20 @@ It must use only an explicitly authorized test account and should record
 provider, browser, message role counts, preview/Markdown/PDF results, branch
 handling, attachments, and failure/retry behavior without recording chat text
 or credentials.
+
+## Plasmo audit disposition
+
+The production dependency gate is currently clean:
+
+```text
+npm audit --omit=dev: 0 vulnerabilities
+```
+
+The full audit currently reports 74 findings (3 moderate, 71 high, 0 critical)
+in the development/build chain (`plasmo@0.90.5` through Parcel 2.9.3 and related packaging tools). Those packages are not
+bundled into the extension ZIP, so they are not the same as a runtime
+vulnerability in the installed extension. They are still our build supply-chain
+responsibility: keep the development server local, monitor upstream fixes, and
+test any Plasmo/Parcel upgrade before adopting it. Do not run
+`npm audit fix --force` blindly; npm currently proposes a semver-major Plasmo
+change that must be treated as a separate compatibility migration.

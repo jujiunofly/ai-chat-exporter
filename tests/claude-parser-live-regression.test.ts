@@ -67,6 +67,30 @@ describe('Claude parser live DOM regressions', () => {
     ])
   })
 
+  it('keeps Claude answer layout when parsing the rendered DOM', async () => {
+    document.body.innerHTML = `
+      <main>
+        <div data-testid="user-message">Please format this answer.</div>
+        <div data-is-streaming="false">
+          <div class="prose">
+            <h2>Visual overhaul:</h2>
+            <p>Use <strong>clear sections</strong> and keep the spacing.</p>
+            <ul><li>First item</li><li>Second item</li></ul>
+            <pre><code class="language-ts">const ready = true</code></pre>
+          </div>
+        </div>
+      </main>
+    `
+
+    const conversation = await new ClaudeParser().parseCurrentConversation()
+    const assistant = conversation?.messages.find(message => message.role === 'assistant')
+
+    expect(assistant?.content).toContain('## Visual overhaul:')
+    expect(assistant?.content).toContain('Use **clear sections** and keep the spacing.')
+    expect(assistant?.content).toContain('- First item\n- Second item')
+    expect(assistant?.content).toContain('```ts\nconst ready = true\n```')
+  })
+
   it('exports only the branch selected by Claude current leaf metadata', () => {
     const records = [
       { uuid: 'u1', sender: 'human', content: 'Question' },

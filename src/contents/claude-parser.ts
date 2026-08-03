@@ -8,10 +8,11 @@
  * - Org ID is extracted from the page HTML or API responses
  */
 import type { Conversation, ChatMessage, PlatformParser, ConversationListItem, ConversationArtifact } from '../lib/types'
-import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
+import { generateId, extractTextContent, extractCodeBlocks, extractImages } from '../lib/dom-utils'
 import { preferMoreCompleteConversation } from '../lib/parser-fallback'
-import { extractApiMessageText, getApiMessageRecords, normalizeApiMessageRole } from '../lib/api-message-normalizer'
+import { getApiMessageRecords, normalizeApiMessageRole } from '../lib/api-message-normalizer'
 import { inferClaudeArtifactType } from '../lib/claude-artifact'
+import { claudeElementToMarkdown, extractClaudeMessageMarkdown, normalizeClaudeMarkdown } from '../lib/claude-rich-text'
 
 /** UUID regex for matching conversation IDs and org IDs */
 const UUID_REGEX = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
@@ -430,7 +431,7 @@ export class ClaudeParser implements PlatformParser {
           const role = normalizeApiMessageRole(msg)
           if (!role) continue
 
-          const content = extractApiMessageText(msg)
+          const content = extractClaudeMessageMarkdown(msg)
           const blocks = Array.isArray(msg.content) ? msg.content : []
           for (const block of blocks) {
             if (!block || typeof block !== 'object') continue
@@ -461,7 +462,7 @@ export class ClaudeParser implements PlatformParser {
                   ? msg.id
                   : generateId(),
               role,
-              content: cleanText(content.trim()),
+              content: normalizeClaudeMarkdown(content),
             })
           }
       }
@@ -546,7 +547,7 @@ export class ClaudeParser implements PlatformParser {
         messages.push({
           id: generateId(),
           role,
-          content: cleanText(content)
+          content: normalizeClaudeMarkdown(content)
         })
       })
     }
@@ -621,7 +622,7 @@ export class ClaudeParser implements PlatformParser {
     return {
       id: messageId,
       role,
-      content: cleanText(content),
+      content: normalizeClaudeMarkdown(content),
       attachments: attachments.length > 0 ? attachments : undefined,
       codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined
     }
@@ -670,61 +671,7 @@ export class ClaudeParser implements PlatformParser {
     const clone = element.cloneNode(true) as Element
 
     // Remove non-content elements
-    const removeSelectors = [
-      'button',
-      '[class*="toolbar"]',
-      '[class*="action"]',
-      '[class*="copy"]',
-      '[class*="edit"]',
-      '[class*="regenerate"]',
-      '[class*="feedback"]',
-      '[class*="menu"]',
-      '[data-testid="copy-button"]',
-      '[data-testid="edit-button"]'
-    ]
-
-    removeSelectors.forEach(selector => {
-      clone.querySelectorAll(selector).forEach(el => el.remove())
-    })
-
-    let content = ''
-
-    const walker = document.createTreeWalker(
-      clone,
-      NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
-      {
-        acceptNode: (node) => {
-          if (node.nodeType === Node.TEXT_NODE) {
-            return NodeFilter.FILTER_ACCEPT
-          }
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            const el = node as Element
-            const tag = el.tagName.toLowerCase()
-            if (['p', 'span', 'div', 'strong', 'em', 'code', 'pre', 'blockquote', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag)) {
-              return NodeFilter.FILTER_ACCEPT
-            }
-            return NodeFilter.FILTER_SKIP
-          }
-          return NodeFilter.FILTER_SKIP
-        }
-      }
-    )
-
-    let node: Node | null
-    const textParts: string[] = []
-
-    while ((node = walker.nextNode())) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        const text = node.textContent?.trim()
-        if (text) {
-          textParts.push(text)
-        }
-      }
-    }
-
-    content = textParts.join(' ')
-
-    return cleanText(content)
+    return claudeElementToMarkdown(clone)
   }
 
   /**
