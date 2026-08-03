@@ -1,7 +1,7 @@
-# v1.2.0 Release and Browser-Store Workflow
+# Release and Browser-Store Workflow
 
 This policy defines how AI Chat Exporter changes become verified, release-ready
-v1.2.0 deliverables. It separates source-controlled inputs from generated
+browser deliverables. It separates source-controlled inputs from generated
 packages and does not assume authenticated provider testing.
 
 ## 1. Scope and source-control policy
@@ -26,10 +26,10 @@ Provider-specific rules:
 
 ## 2. Set the release version
 
-For v1.2.0, set the exact release version before creating store archives:
+Set the exact release version before creating store archives:
 
 ~~~bash
-npm version 1.2.0 --no-git-tag-version
+npm version <release-version> --no-git-tag-version
 ~~~
 
 For subsequent releases, select the next semantic version deliberately. The
