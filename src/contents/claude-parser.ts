@@ -596,8 +596,13 @@ export class ClaudeParser implements PlatformParser {
     if (!role) return null
 
     // Extract content from the message
+    // Prefer Claude's semantic prose/Markdown container. The legacy
+    // `.font-claude-message` wrapper can be an ancestor that also contains
+    // controls or a flattened mirror of the answer.
     const contentElement = element.querySelector(
-      '.font-claude-message, .font-claude-response, .prose, [class*="markdown"], [class*="content"]'
+      '.prose, [class*="markdown"]'
+    ) || element.querySelector(
+      '.font-claude-message, .font-claude-response, [class*="content"]'
     ) || element
 
     const content = this.extractMessageContent(contentElement)

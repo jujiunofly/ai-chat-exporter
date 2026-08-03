@@ -91,6 +91,24 @@ describe('Claude parser live DOM regressions', () => {
     expect(assistant?.content).toContain('```ts\nconst ready = true\n```')
   })
 
+  it('prefers the semantic prose child over a legacy wrapper mirror', async () => {
+    document.body.innerHTML = `
+      <main>
+        <div data-testid="user-message">Question</div>
+        <div data-is-streaming="false">
+          <div class="font-claude-message">
+            Flattened mirror that should not win
+            <div class="prose"><p><strong>Structured answer</strong></p></div>
+          </div>
+        </div>
+      </main>
+    `
+
+    const conversation = await new ClaudeParser().parseCurrentConversation()
+    expect(conversation?.messages.find(message => message.role === 'assistant')?.content)
+      .toBe('**Structured answer**')
+  })
+
   it('exports only the branch selected by Claude current leaf metadata', () => {
     const records = [
       { uuid: 'u1', sender: 'human', content: 'Question' },
