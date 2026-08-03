@@ -156,7 +156,7 @@ function generateMessageHtml(message: ChatMessage, options: ExportOptions): stri
  * that parsers attached to `conversation.artifacts` or to individual messages.
  * User-uploaded document artifacts honor `includeUploadedFiles`.
  */
-function generateArtifactsHtml(conversation: Conversation, options: ExportOptions): string {
+export function generateArtifactsHtml(conversation: Conversation, options: ExportOptions): string {
   const refs: { name: string; url: string }[] = []
   const seen = new Set<string>()
   const add = (name: string, url: string) => {
@@ -347,7 +347,7 @@ function markdownTextToHtml(text: string): string {
  * @param content - Markdown content
  * @returns HTML formatted content
  */
-function formatHtmlContent(content: string): string {
+export function formatHtmlContent(content: string): string {
   // Split into segments: code blocks, LaTeX, and regular text
   const segments = splitHtmlContentSegments(content)
   let html = ''

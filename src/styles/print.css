@@ -114,6 +114,58 @@ body {
   margin-bottom: 8px;
 }
 
+/* Rich Markdown content in the rendered preview. */
+.chat-bubble .message-content {
+  white-space: normal;
+}
+
+.chat-bubble .message-content h1,
+.chat-bubble .message-content h2,
+.chat-bubble .message-content h3,
+.chat-bubble .message-content h4,
+.chat-bubble .message-content h5,
+.chat-bubble .message-content h6 {
+  margin: 12px 0 8px;
+  line-height: 1.25;
+}
+
+.chat-bubble .message-content ul,
+.chat-bubble .message-content ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.chat-bubble .message-content blockquote {
+  margin: 10px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border-medium);
+  color: var(--text-secondary);
+}
+
+.chat-bubble .message-content table {
+  width: 100%;
+  margin: 10px 0;
+  border-collapse: collapse;
+}
+
+.chat-bubble .message-content th,
+.chat-bubble .message-content td {
+  border: 1px solid var(--border-light);
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.preview-artifacts {
+  width: 100%;
+}
+
+.preview-artifacts .artifacts {
+  padding: 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+}
+
 /* ===== Download Buttons ===== */
 .preview-actions {
   display: flex;

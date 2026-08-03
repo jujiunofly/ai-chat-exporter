@@ -9,6 +9,7 @@ import '../styles/print.css'
 import type { Conversation, ChatMessage, ExtensionSettings } from '../lib/types'
 import { DEFAULT_SETTINGS } from '../lib/types'
 import { conversationToMarkdown } from '../lib/export-markdown'
+import { formatHtmlContent, generateArtifactsHtml } from '../lib/export-pdf'
 import { generateFilename } from '../lib/filename'
 import { buildDownloadFilename } from '../lib/download-path'
 import { downloadAndWait } from '../lib/download-completion'
@@ -48,9 +49,8 @@ const MoonIcon = () => (
 function MessageBubble({ msg, platformName }: { msg: ChatMessage; platformName: string }) {
   const isUser = msg.role === 'user'
   const content = msg.content
-
-  // Split content into paragraphs on double newlines
-  const paragraphs = content.split(/\n\n+/).filter(p => p.trim())
+  const renderedContent = formatHtmlContent(content)
+  const hasEmbeddedCodeBlocks = /```[\s\S]*?```/.test(content)
 
   return (
     <div className={`chat-bubble ${isUser ? 'user' : 'ai'}`}>
@@ -58,15 +58,16 @@ function MessageBubble({ msg, platformName }: { msg: ChatMessage; platformName: 
         {isUser ? 'You' : platformName}
       </div>
 
-      {/* Text paragraphs */}
-      {paragraphs.map((p, i) => (
-        <p key={i} style={{ margin: '8px 0' }}>
-          {p}
-        </p>
-      ))}
+      {/* Render the same safe Markdown structure used by PDF export. */}
+      {renderedContent && (
+        <div
+          className="message-content"
+          dangerouslySetInnerHTML={{ __html: renderedContent }}
+        />
+      )}
 
       {/* Code blocks */}
-      {msg.codeBlocks?.map((block, i) => (
+      {!hasEmbeddedCodeBlocks && msg.codeBlocks?.map((block, i) => (
         <pre key={`code-${i}`}>
           <code>{block.code}</code>
         </pre>
@@ -110,6 +111,18 @@ export default function Preview() {
   const [integrityWarning, setIntegrityWarning] = useState<string | null>(null)
 
   const T = (key: string) => t(key, locale)
+
+  const artifactHtml = conversation && settings.exportArtifacts
+    ? generateArtifactsHtml(conversation, {
+        format: 'markdown',
+        includeMetadata: settings.includeMetadata,
+        includeCodeBlocks: settings.includeCodeBlocks,
+        includeImages: settings.includeImages,
+        exportArtifacts: settings.exportArtifacts,
+        includeUploadedFiles: settings.includeUploadedFiles,
+        filenamePattern: settings.filenamePattern
+      })
+    : ''
 
   // Load settings (theme + locale) from storage
   useEffect(() => {
@@ -376,6 +389,12 @@ export default function Preview() {
             {conversation.messages.map((msg) => (
               <MessageBubble key={msg.id} msg={msg} platformName={platformName} />
             ))}
+            {artifactHtml && (
+              <div
+                className="preview-artifacts"
+                dangerouslySetInnerHTML={{ __html: artifactHtml }}
+              />
+            )}
           </div>
         )}
 

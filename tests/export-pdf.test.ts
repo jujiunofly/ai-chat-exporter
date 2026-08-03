@@ -7,6 +7,7 @@ import {
   calculatePdfPageSlices,
   conversationToHtml,
   exportToPdfBlob,
+  formatHtmlContent,
   groupPdfPageSlices
 } from '../src/lib/export-pdf'
 import type { Conversation, ExportOptions } from '../src/lib/types'
@@ -98,6 +99,15 @@ describe('Export PDF', () => {
   })
 
   describe('conversationToHtml', () => {
+    it('renders rich Markdown structure for the shared preview/PDF path', () => {
+      const html = formatHtmlContent('## Heading\n\n- First\n- Second\n\n```ts\nconst ready = true\n```')
+
+      expect(html).toContain('<h2>Heading</h2>')
+      expect(html).toContain('<ul>')
+      expect(html).toContain('<li>First</li>')
+      expect(html).toContain('<pre data-language="ts"><code>const ready = true</code></pre>')
+    })
+
     it('should generate valid HTML structure', () => {
       const conv = createConversation()
       const html = conversationToHtml(conv, defaultOptions)
