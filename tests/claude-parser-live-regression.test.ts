@@ -109,6 +109,49 @@ describe('Claude parser live DOM regressions', () => {
       .toBe('**Structured answer**')
   })
 
+  it('uses visible API Markdown and keeps artifacts separate from tool activity', async () => {
+    const orgId = '11111111-1111-4111-8111-111111111111'
+    document.body.innerHTML = `<script>https://claude.ai/api/organizations/${orgId}/chat_conversations</script>`
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        uuid: 'conversation-1',
+        name: 'API conversation',
+        chat_messages: [
+          { uuid: 'user-1', sender: 'human', content: [{ type: 'text', text: 'Question' }] },
+          {
+            uuid: 'assistant-1',
+            sender: 'assistant',
+            content: [
+              { type: 'thinking', thinking: 'private reasoning' },
+              { type: 'text', text: '## Structured answer\n\n- Keep this list' },
+              {
+                type: 'tool_use',
+                name: 'artifacts',
+                input: { type: 'html', title: 'Dashboard', content: '<html></html>' }
+              }
+            ]
+          }
+        ]
+      })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      const conversation = await new ClaudeParser().fetchConversationDetail('conversation-1')
+      expect(conversation?.messages.map(message => message.content)).toEqual([
+        'Question',
+        '## Structured answer\n\n- Keep this list'
+      ])
+      expect(conversation?.messages[1].content).not.toContain('private reasoning')
+      expect(conversation?.artifacts?.[0]).toMatchObject({ title: 'Dashboard', type: 'html' })
+    } finally {
+      vi.stubGlobal('fetch', originalFetch)
+    }
+  })
+
   it('exports only the branch selected by Claude current leaf metadata', () => {
     const records = [
       { uuid: 'u1', sender: 'human', content: 'Question' },

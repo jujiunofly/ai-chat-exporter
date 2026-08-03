@@ -238,6 +238,25 @@ describe('Export PDF', () => {
         expect(html).toContain('https://safe.example/a.html')
       })
 
+      it('renders inline artifact metadata and content safely', () => {
+        const conv = createConversation({
+          artifacts: [{
+            type: 'html',
+            title: 'Core dashboard',
+            content: '<script>alert(1)</script>',
+            language: 'html',
+            mimeType: 'text/html'
+          }]
+        })
+        const html = conversationToHtml(conv, { ...defaultOptions, exportArtifacts: true })
+
+        expect(html).toContain('<h3>Core dashboard</h3>')
+        expect(html).toContain('<strong>Type:</strong> html')
+        expect(html).toContain('<strong>MIME type:</strong> text/html')
+        expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+        expect(html).not.toContain('<script>alert(1)</script>')
+      })
+
       it('omits the Artifacts block when exportArtifacts is off', () => {
         const conv = createConversation({
           artifacts: [

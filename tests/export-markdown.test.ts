@@ -341,6 +341,25 @@ describe('Export Markdown', () => {
       expect(md).toContain('[Page](https://example.com/artifact.html)')
     })
 
+    it('includes inline artifact metadata and content after tool blocks are hidden', () => {
+      const conv = createConversation({
+        artifacts: [{
+          type: 'html',
+          title: 'Core dashboard',
+          content: '<html><body>dashboard</body></html>',
+          language: 'html',
+          mimeType: 'text/html'
+        }]
+      })
+      const md = conversationToMarkdown(conv, { ...defaultOptions, exportArtifacts: true })
+
+      expect(md).toContain('### Core dashboard')
+      expect(md).toContain('- **Type:** html')
+      expect(md).toContain('- **Language:** html')
+      expect(md).toContain('- **MIME type:** text/html')
+      expect(md).toContain('```html\n<html><body>dashboard</body></html>\n```')
+    })
+
     it('does NOT emit the section when exportArtifacts is off', () => {
       const conv = createConversation({
         artifacts: [{ type: 'html', title: 'Page', content: '<html></html>', url: 'https://example.com/a.html' }]

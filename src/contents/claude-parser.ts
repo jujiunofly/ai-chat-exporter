@@ -432,7 +432,11 @@ export class ClaudeParser implements PlatformParser {
           if (!role) continue
 
           const content = extractClaudeMessageMarkdown(msg)
-          const blocks = Array.isArray(msg.content) ? msg.content : []
+          const blocks = Array.isArray(msg.content)
+            ? msg.content
+            : Array.isArray(msg.message?.content)
+              ? msg.message.content
+              : []
           for (const block of blocks) {
             if (!block || typeof block !== 'object') continue
             const typedBlock = block as Record<string, any>

@@ -37,7 +37,8 @@ export function conversationToMarkdown(
   // attached to individual messages, so the toggle is never silently dead.
   if (options.exportArtifacts) {
     const artifactRefs = collectArtifactReferences(conversation, options)
-    if (artifactRefs.length > 0) {
+    const inlineArtifacts = collectInlineArtifacts(conversation, options)
+    if (artifactRefs.length > 0 || inlineArtifacts.length > 0) {
       lines.push('## Artifacts')
       lines.push('')
       lines.push('_AI-generated artifacts and research documents referenced in this conversation:_')
@@ -49,6 +50,25 @@ export function conversationToMarkdown(
         const url = sanitizeUrl(ref.url)
         lines.push(`- [${name}](${url})`)
       })
+      for (const artifact of inlineArtifacts) {
+        lines.push('')
+        lines.push(`### ${escapeMarkdownLinkText(artifact.title || 'Artifact').replace(/[\r\n]+/g, ' ')}`)
+        lines.push('')
+        lines.push(`- **Type:** ${artifact.type}`)
+        if (artifact.language) lines.push(`- **Language:** ${escapeMarkdownLinkText(artifact.language)}`)
+        if (artifact.mimeType) lines.push(`- **MIME type:** ${escapeMarkdownLinkText(artifact.mimeType)}`)
+        if (artifact.url && sanitizeUrl(artifact.url)) {
+          lines.push(`- **Open:** [${escapeMarkdownLinkText(artifact.url)}](${sanitizeUrl(artifact.url)})`)
+        }
+        if (artifact.content) {
+          const fence = markdownFence(artifact.content)
+          const language = artifact.language || (artifact.type === 'html' ? 'html' : '')
+          lines.push('')
+          lines.push(`${fence}${language}`)
+          lines.push(artifact.content)
+          lines.push(fence)
+        }
+      }
       lines.push('')
     }
   }
@@ -193,7 +213,7 @@ function collectArtifactReferences(
   const seen = new Set<string>()
 
   const add = (name: string, url: string) => {
-    if (url && !seen.has(url)) {
+    if (url && sanitizeUrl(url) && !seen.has(url)) {
       seen.add(url)
       refs.push({ name: name || url, url })
     }
@@ -218,6 +238,23 @@ function collectArtifactReferences(
   }
 
   return refs
+}
+
+/** Return inline artifacts that would otherwise disappear when tool blocks are hidden. */
+function collectInlineArtifacts(
+  conversation: Conversation,
+  options: ExportOptions
+): NonNullable<Conversation['artifacts']> {
+  return (conversation.artifacts || []).filter(artifact => {
+    const isUploadedFile = artifact.type === 'document' && !artifact.content
+    if (isUploadedFile && options.includeUploadedFiles === false) return false
+    return Boolean(artifact.content || artifact.title || artifact.url)
+  })
+}
+
+function markdownFence(content: string): string {
+  const longestRun = Math.max(...Array.from(content.matchAll(/`+/g), match => match[0].length), 2)
+  return '`'.repeat(Math.max(3, longestRun + 1))
 }
 
 /**

@@ -181,7 +181,13 @@ function generateArtifactsHtml(conversation: Conversation, options: ExportOption
     }
   }
 
-  if (refs.length === 0) return ''
+  const inlineArtifacts = (conversation.artifacts || []).filter(artifact => {
+    const isUploadedFile = artifact.type === 'document' && !artifact.content
+    if (isUploadedFile && options.includeUploadedFiles === false) return false
+    return Boolean(artifact.content || artifact.title || artifact.url)
+  })
+
+  if (refs.length === 0 && inlineArtifacts.length === 0) return ''
 
   const items = refs.map(ref => {
     const name = escapeHtml(ref.name)
@@ -190,7 +196,25 @@ function generateArtifactsHtml(conversation: Conversation, options: ExportOption
     return `<li><a href="${escapeHtml(safe)}">${name}</a></li>`
   }).join('\n')
 
-  return `\n    <div class="artifacts">\n      <h2>Artifacts</h2>\n      <p><em>AI-generated artifacts and research documents referenced in this conversation:</em></p>\n      <ul>\n${items}\n      </ul>\n    </div>`
+  const inline = inlineArtifacts.map(artifact => {
+    const title = escapeHtml(artifact.title || 'Artifact')
+    const language = artifact.language ? ` data-language="${escapeHtml(artifact.language)}"` : ''
+    const details = [
+      `<h3>${title}</h3>`,
+      `<p><strong>Type:</strong> ${escapeHtml(artifact.type)}</p>`,
+      artifact.language ? `<p><strong>Language:</strong> ${escapeHtml(artifact.language)}</p>` : '',
+      artifact.mimeType ? `<p><strong>MIME type:</strong> ${escapeHtml(artifact.mimeType)}</p>` : '',
+      artifact.content
+        ? `<pre${language}><code>${escapeHtml(artifact.content)}</code></pre>`
+        : ''
+    ].filter(Boolean).join('\n')
+    return `<section class="artifact">${details}</section>`
+  }).join('\n')
+
+  const referenceList = refs.length > 0
+    ? `<ul>\n${items}\n      </ul>`
+    : ''
+  return `\n    <div class="artifacts">\n      <h2>Artifacts</h2>\n      <p><em>AI-generated artifacts and research documents referenced in this conversation:</em></p>\n      ${referenceList}\n      ${inline}\n    </div>`
 }
 
 /**
