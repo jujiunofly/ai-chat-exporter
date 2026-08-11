@@ -9,6 +9,7 @@ vi.mock('../src/lib/dom-utils', () => ({
   generateId: () => 'test-id-456',
   extractTextContent: (element: Element | null) => element?.textContent?.trim() || '',
   extractTextWithBreaks: (element: Element | null) => element?.textContent?.trim() || '',
+  extractTextWithMedia: (element: Element | null) => element?.textContent?.trim() || '',
   extractCodeBlocks: () => [],
   extractImages: () => [],
   cleanText: (text: string) => text.replace(/\s+/g, ' ').trim()

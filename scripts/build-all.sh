@@ -39,20 +39,28 @@ zip -r ../../ai-chat-exporter.zip . > /dev/null
 echo "Chrome/Edge: $(ls -lh ../../ai-chat-exporter.zip | awk '{print $5}')"
 
 echo ""
-echo "=== Applying Firefox patches ==="
+echo "=== Preparing isolated Firefox build ==="
 cd ../..
-node scripts/patch-firefox-manifest.js
-node scripts/verify-build.js firefox
+FIREFOX_BUILD_DIR="build/firefox-mv3-prod"
+rm -rf "$FIREFOX_BUILD_DIR"
+rsync -a --delete build/chrome-mv3-prod/ "$FIREFOX_BUILD_DIR/"
+BUILD_DIR="$FIREFOX_BUILD_DIR" node scripts/patch-firefox-manifest.js
+BUILD_DIR="$FIREFOX_BUILD_DIR" node scripts/verify-build.js firefox
 
 echo ""
 echo "=== Creating Firefox ZIP (patched manifest) ==="
-cd build/chrome-mv3-prod
+cd "$FIREFOX_BUILD_DIR"
 rm -f ../../ai-chat-exporter-firefox.zip
 zip -r ../../ai-chat-exporter-firefox.zip . > /dev/null
 echo "Firefox: $(ls -lh ../../ai-chat-exporter-firefox.zip | awk '{print $5}')"
 
-# Source packaging uses repository-relative paths and the selected ref's metadata.
+# Keep the Chrome build and unpacked mirror available for local development;
+# Firefox-specific manifest fields live only in the isolated staging directory.
 cd ../..
+node scripts/verify-build.js chrome
+node scripts/verify-build.js unpacked
+
+# Source packaging uses repository-relative paths and the selected ref's metadata.
 
 if [[ "$BUILD_SOURCE_ARCHIVE" -eq 1 ]]; then
   echo ""

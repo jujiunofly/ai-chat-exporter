@@ -3,12 +3,14 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { ProviderRateLimitError } from '../src/lib/provider-rate-limit'
 
 // Mock DOM utilities
 vi.mock('../src/lib/dom-utils', () => ({
   generateId: () => 'test-id-deepseek',
   extractTextContent: (element: Element | null) => element?.textContent?.trim() || '',
   extractTextWithBreaks: (element: Element | null) => element?.textContent?.trim() || '',
+  extractTextWithMedia: (element: Element | null) => element?.textContent?.trim() || '',
   extractCodeBlocks: () => [],
   extractImages: () => [],
   cleanText: (text: string) => text.replace(/\s+/g, ' ').trim()
@@ -268,5 +270,21 @@ describe('DeepSeek Parser', () => {
       expect(url.hostname).not.toBe('deepseek.com')
       expect(url.hostname).not.toBe('chat.deepseek.com')
     })
+  })
+
+  it('surfaces a 429 detail response as the safe rate-limit signal', async () => {
+    ;(globalThis as any).chrome = {
+      runtime: { onMessage: { addListener: vi.fn() } },
+      storage: { local: { set: vi.fn() } },
+    }
+    const { DeepSeekParser } = await import('../src/contents/deepseek-parser')
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 429,
+      json: async () => ({}),
+    })))
+
+    await expect(new DeepSeekParser().fetchConversationDetail('conversation-id'))
+      .rejects.toBeInstanceOf(ProviderRateLimitError)
   })
 })

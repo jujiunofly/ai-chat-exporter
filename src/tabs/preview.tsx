@@ -3,59 +3,66 @@
  * Polished document preview with rendered chat bubbles and raw markdown view
  */
 
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import '../styles/popup.css'
 import '../styles/print.css'
 import type { Conversation, ChatMessage, ExtensionSettings } from '../lib/types'
-import { DEFAULT_SETTINGS } from '../lib/types'
+import { DEFAULT_SETTINGS, mergeExtensionSettings } from '../lib/types'
 import { conversationToMarkdown } from '../lib/export-markdown'
-import { formatHtmlContent, generateArtifactsHtml } from '../lib/export-pdf'
+import { formatHtmlContent, generateArtifactsHtml, getAssistantDisplayName, platformDisplayName } from '../lib/export-pdf'
+import { embedInlineImageAttachments, isInlineImageAttachment, removeInlineMarkdownImages } from '../lib/inline-media'
 import { generateFilename } from '../lib/filename'
 import { buildDownloadFilename } from '../lib/download-path'
-import { downloadAndWait } from '../lib/download-completion'
+import { downloadMarkdownFile, finalizeExport } from '../lib/export-download'
 import { analyzeConversationIntegrity, conversationIntegrityError, isConversationComplete } from '../lib/conversation-integrity'
 import { t, type Locale } from '../lib/i18n'
 import { useFullPageScroll } from '../lib/use-full-page-scroll'
+import { useThemeSync } from '../lib/use-theme-sync'
+import { DownloadIcon, SunIcon, MoonIcon } from '../components/icons'
 
 type PreviewMode = 'rendered' | 'markdown'
-
-/** Inline SVG Icons */
-const DownloadIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-    <polyline points="7 10 12 15 17 10"></polyline>
-    <line x1="12" y1="15" x2="12" y2="3"></line>
-  </svg>
-)
-
-/** Sun icon (light mode) */
-const SunIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="4"></circle>
-    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
-  </svg>
-)
-
-/** Moon icon (dark mode) */
-const MoonIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-  </svg>
-)
 
 /**
  * Render a single message as a chat bubble
  */
-function MessageBubble({ msg, platformName }: { msg: ChatMessage; platformName: string }) {
+function MessageBubble({
+  msg,
+  assistantLabel,
+  showMessageTimestamps,
+  includeImages,
+  locale
+}: {
+  msg: ChatMessage
+  assistantLabel: string
+  showMessageTimestamps: boolean
+  includeImages: boolean
+  locale: Locale
+}) {
   const isUser = msg.role === 'user'
-  const content = msg.content
+  const isSystem = msg.role === 'system'
+  const inlineImages = embedInlineImageAttachments(msg.content, msg.attachments)
+  const content = includeImages ? inlineImages.content : removeInlineMarkdownImages(inlineImages.content)
   const renderedContent = formatHtmlContent(content)
   const hasEmbeddedCodeBlocks = /```[\s\S]*?```/.test(content)
+  const timestamp = msg.timestamp ? new Date(msg.timestamp) : null
+  const hasTimestamp = Boolean(timestamp && !Number.isNaN(timestamp.getTime()) && showMessageTimestamps)
 
   return (
-    <div className={`chat-bubble ${isUser ? 'user' : 'ai'}`}>
-      <div className="role-label">
-        {isUser ? 'You' : platformName}
+    <div className={`chat-bubble ${isUser ? 'user' : isSystem ? 'system' : 'ai'}`}>
+      <div className="message-meta">
+        <span className="role-label">
+          {msg.authorName || (isUser ? t('User', locale) : isSystem ? t('System', locale) : assistantLabel)}
+        </span>
+        {hasTimestamp && timestamp && (
+          <>
+            <span className="meta-separator" aria-hidden="true">·</span>
+            <time className="timestamp" dateTime={timestamp.toISOString()}>
+              {new Intl.DateTimeFormat(locale, {
+                year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+              }).format(timestamp)}
+            </time>
+          </>
+        )}
       </div>
 
       {/* Render the same safe Markdown structure used by PDF export. */}
@@ -75,19 +82,11 @@ function MessageBubble({ msg, platformName }: { msg: ChatMessage; platformName: 
 
       {/* Image attachments */}
       {msg.attachments
-        ?.filter(a => a.type === 'image')
+        ?.filter(attachment => attachment.type === 'image' && includeImages && !isInlineImageAttachment(attachment, inlineImages.usedImageUrls))
         .map((att, i) => (
-          <img
-            key={`img-${i}`}
-            src={att.url}
-            alt={att.name || 'Image'}
-            style={{
-              maxWidth: '100%',
-              borderRadius: '8px',
-              marginTop: '8px',
-              display: 'block'
-            }}
-          />
+          <figure className="image" key={`img-${i}`}>
+            <img src={att.url} alt={att.name || 'Image'} />
+          </figure>
         ))}
     </div>
   )
@@ -110,6 +109,8 @@ export default function Preview() {
   const [settings, setSettings] = useState<ExtensionSettings>(DEFAULT_SETTINGS)
   const [integrityWarning, setIntegrityWarning] = useState<string | null>(null)
 
+  useThemeSync(theme)
+
   const T = (key: string) => t(key, locale)
 
   const artifactHtml = conversation && settings.exportArtifacts
@@ -120,20 +121,20 @@ export default function Preview() {
         includeImages: settings.includeImages,
         exportArtifacts: settings.exportArtifacts,
         includeUploadedFiles: settings.includeUploadedFiles,
-        filenamePattern: settings.filenamePattern
+        filenamePattern: settings.filenamePattern,
+        assistantDisplayName: settings.assistantDisplayName,
+        showMessageTimestamps: settings.showMessageTimestamps,
+        locale
       })
     : ''
 
   // Load settings (theme + locale) from storage
   useEffect(() => {
     chrome.storage.local.get('settings').then(result => {
-      const s = { ...DEFAULT_SETTINGS, ...(result.settings || {}) } as ExtensionSettings
+      const s = mergeExtensionSettings(result.settings)
       setSettings(s)
-      if (s?.theme) {
-        setTheme(s.theme)
-        document.documentElement.setAttribute('data-theme', s.theme)
-      }
-      if (s?.locale) setLocale(s.locale)
+      if (s.theme) setTheme(s.theme)
+      if (s.locale) setLocale(s.locale)
     }).catch(() => {})
   }, [])
 
@@ -169,7 +170,7 @@ export default function Preview() {
         }
         // A requested id is authoritative. Never substitute another stored
         // conversation when the requested snapshot is missing.
-        setError(`Conversation ${conversationId} is unavailable for preview`)
+        setError(t('Conversation {0} is unavailable for preview', locale, conversationId))
         setLoading(false)
         return
       }
@@ -184,10 +185,10 @@ export default function Preview() {
         const integrity = analyzeConversationIntegrity(conv)
         setIntegrityWarning(isConversationComplete(conv) ? null : conversationIntegrityError(integrity))
       } else {
-        setError('No conversation to preview')
+        setError(t('No conversation to preview', locale))
       }
     } catch (_err) {
-      setError('Failed to load conversation')
+      setError(t('Failed to load conversation', locale))
     } finally {
       setLoading(false)
     }
@@ -206,9 +207,25 @@ export default function Preview() {
         includeImages: settings.includeImages,
         exportArtifacts: settings.exportArtifacts,
         includeUploadedFiles: settings.includeUploadedFiles,
-        filenamePattern: settings.filenamePattern
+        filenamePattern: settings.filenamePattern,
+        assistantDisplayName: settings.assistantDisplayName,
+        showMessageTimestamps: settings.showMessageTimestamps,
+        locale
       })
     )
+  }
+
+  /**
+   * Toggle theme and persist it like popup/options do
+   */
+  const toggleTheme = async () => {
+    const next: ExtensionSettings['theme'] = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    const updated = { ...settings, theme: next }
+    setSettings(updated)
+    try {
+      await chrome.storage.local.set({ settings: updated })
+    } catch {}
   }
 
   /**
@@ -236,12 +253,10 @@ export default function Preview() {
    */
   const downloadContent = async () => {
     if (!conversation || !isConversationComplete(conversation)) {
-      setFeedback(conversation ? conversationIntegrityError(analyzeConversationIntegrity(conversation)) : 'Conversation is unavailable')
+      setFeedback(conversation ? conversationIntegrityError(analyzeConversationIntegrity(conversation)) : T('Conversation is unavailable'))
       return
     }
     const filename = `${conversation.title || 'conversation'}.md`
-    const blob = new Blob([markdownContent], { type: 'text/markdown' })
-    const url = URL.createObjectURL(blob)
     try {
       const baseFilename = settings.filenamePattern
         ? generateFilename(settings.filenamePattern, conversation)
@@ -253,17 +268,14 @@ export default function Preview() {
         settings.downloadFolder,
         settings.customFolderName
       )
-      await downloadAndWait({ url, filename: downloadFilename, saveAs: false })
-      const finalized = await chrome.runtime.sendMessage({
-        type: 'EXPORT_REQUEST',
-        data: { conversation, format: 'markdown', filename: downloadFilename }
+      await downloadMarkdownFile(markdownContent, {
+        filename: downloadFilename,
+        saveAs: settings.askForSaveLocation ?? false,
       })
-      if (finalized?.error) throw new Error(finalized.error)
+      await finalizeExport(conversation, 'markdown', downloadFilename)
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : 'Download failed')
+      setFeedback(error instanceof Error ? error.message : T('Download failed'))
       return
-    } finally {
-      URL.revokeObjectURL(url)
     }
     setFeedback('Downloaded!')
     setTimeout(() => setFeedback(null), 2000)
@@ -271,10 +283,10 @@ export default function Preview() {
 
   if (loading) {
     return (
-      <div className="preview-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '300px' }}>
-        <div className="empty-state" style={{ border: 'none', background: 'transparent' }}>
-          <span className="spinner" style={{ borderTopColor: 'var(--primary)', width: '24px', height: '24px' }}></span>
-          <p style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>{T('Loading preview...')}</p>
+      <div className="preview-container preview-status">
+        <div className="empty-state">
+          <span className="spinner"></span>
+          <p className="preview-status-text">{T('Loading preview...')}</p>
         </div>
       </div>
     )
@@ -282,74 +294,61 @@ export default function Preview() {
 
   if (error) {
     return (
-      <div className="preview-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '300px' }}>
-        <div className="empty-state" style={{ border: 'none', background: 'transparent' }}>
+      <div className="preview-container preview-status">
+        <div className="empty-state">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--error)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10"></circle>
             <line x1="12" y1="8" x2="12" y2="12"></line>
             <line x1="12" y1="16" x2="12.01" y2="16"></line>
           </svg>
-          <p style={{ fontWeight: 600, color: 'var(--error)' }}>{error}</p>
+          <p className="preview-status-text error">{error}</p>
         </div>
       </div>
     )
   }
 
-  const platformName = conversation?.platform === 'chatgpt'
-    ? 'ChatGPT'
-    : conversation?.platform === 'gemini'
-    ? 'Gemini'
-    : conversation?.platform === 'claude'
-    ? 'Claude'
-    : conversation?.platform === 'deepseek'
-    ? 'DeepSeek'
-    : conversation?.platform === 'grok'
-    ? 'Grok'
-    : 'Unknown'
+  const platformName = conversation ? platformDisplayName(conversation.platform) : 'Unknown'
+  const assistantLabel = conversation
+    ? getAssistantDisplayName(conversation, settings)
+    : platformName
 
   const createdDate = conversation?.createdAt
-    ? new Date(conversation.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-    : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    ? new Date(conversation.createdAt).toLocaleDateString(locale, { year: 'numeric', month: 'long', day: 'numeric' })
+    : new Date().toLocaleDateString(locale, { year: 'numeric', month: 'long', day: 'numeric' })
 
   return (
-    <div className="preview-container">
+    <div className={`preview-container pdf-style-${settings.pdfStyle || 'minimal'}`}>
       {/* Header with title, metadata, and action buttons */}
-      <div className="preview-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 32px', borderBottom: '1px solid var(--border-light)', backgroundColor: 'var(--bg-primary)' }}>
-        <div style={{ flex: 1, minWidth: 0, paddingRight: '20px' }}>
-          <h1 style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text-primary)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+      <div className="preview-header">
+        <div className="preview-header-title">
+          <h1>
             {conversation?.title || T('Preview')}
           </h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+          <div className="preview-header-meta">
             <span>{createdDate}</span>
             <span>&bull;</span>
-            <span style={{ fontWeight: 600 }}>{platformName}</span>
+            <span className="preview-header-platform">{platformName}</span>
             <span>&bull;</span>
             <span>{t('{0} messages', locale, conversation?.messages.length || 0)}</span>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }} className="preview-actions">
+        <div className="preview-actions">
           <button
             className="btn btn-icon"
-            onClick={() => {
-              const next = theme === 'dark' ? 'light' : 'dark'
-              setTheme(next)
-              document.documentElement.setAttribute('data-theme', next)
-            }}
+            onClick={toggleTheme}
             title={T('Toggle Theme')}
             aria-label={T('Toggle Theme')}
           >
             {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
           </button>
           <button
-            className="btn btn-outline"
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', height: '36px', padding: '0 16px' }}
+            className="btn btn-outline btn-header"
             onClick={copyToClipboard}
           >
             {T('Copy')}
           </button>
           <button
-            className="btn btn-primary"
-            style={{ width: 'auto', display: 'flex', alignItems: 'center', gap: '6px', height: '36px', padding: '0 16px' }}
+            className="btn btn-primary btn-header"
             onClick={downloadContent}
           >
             <DownloadIcon /> {T('Download')}
@@ -358,19 +357,17 @@ export default function Preview() {
       </div>
 
       {/* Mode tab bar */}
-      <div style={{ padding: '16px 32px', borderBottom: '1px solid var(--border-light)', backgroundColor: 'var(--bg-tertiary)' }}>
-        <div className="tabs" style={{ display: 'inline-flex' }}>
+      <div className="preview-tab-bar">
+        <div className="tabs">
           <button
             className={`tab ${mode === 'rendered' ? 'active' : ''}`}
             onClick={() => setMode('rendered')}
-            style={{ padding: '8px 24px', flex: 'none' }}
           >
             {T('Rendered')}
           </button>
           <button
             className={`tab ${mode === 'markdown' ? 'active' : ''}`}
             onClick={() => setMode('markdown')}
-            style={{ padding: '8px 24px', flex: 'none' }}
           >
             {T('Markdown')}
           </button>
@@ -380,14 +377,21 @@ export default function Preview() {
       {/* Content area */}
       <div className="preview-body">
         {integrityWarning && (
-          <div className="message error" role="alert" style={{ marginBottom: '16px' }}>
+          <div className="message error preview-integrity-warning" role="alert">
             {integrityWarning}
           </div>
         )}
         {mode === 'rendered' && conversation && (
           <div className="preview-message-list">
             {conversation.messages.map((msg) => (
-              <MessageBubble key={msg.id} msg={msg} platformName={platformName} />
+              <MessageBubble
+                key={msg.id}
+                msg={msg}
+                assistantLabel={assistantLabel}
+                showMessageTimestamps={settings.showMessageTimestamps}
+                includeImages={settings.includeImages}
+                locale={locale}
+              />
             ))}
             {artifactHtml && (
               <div
@@ -399,20 +403,7 @@ export default function Preview() {
         )}
 
         {mode === 'markdown' && (
-          <div style={{
-            background: 'var(--bg-tertiary)',
-            border: '1px solid var(--border-light)',
-            borderRadius: 'var(--radius-md)',
-            padding: '16px',
-            overflow: 'auto',
-            maxHeight: '60vh',
-            fontFamily: 'ui-monospace, Menlo, monospace',
-            fontSize: '12px',
-            lineHeight: '1.6',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            color: 'var(--text-primary)'
-          }}>
+          <div className="markdown-panel">
             {markdownContent}
           </div>
         )}

@@ -2,6 +2,8 @@
  * Shared TypeScript interfaces for AI Chat Exporter
  */
 
+import type { Locale } from './i18n'
+
 /**
  * Represents a single message in a conversation
  */
@@ -32,8 +34,8 @@ export interface Attachment {
   url: string
   /** Optional display name */
   name?: string
-  /** True when this is a file the USER uploaded into the chat (vs. an
-   *  AI-generated artifact). Used to honor the includeUploadedFiles option. */
+  /** True when the attachment originated in a user turn. Exporters use this
+   *  provenance to hide uploaded non-image files without removing images. */
   uploaded?: boolean
 }
 
@@ -81,6 +83,8 @@ export interface Conversation {
   messages: ChatMessage[]
   /** Optional creation timestamp */
   createdAt?: number
+  /** Optional model identifier supplied by the provider API */
+  modelName?: string
   /** Platform where the conversation originates */
   platform: 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok'
   /** Optional artifacts extracted from the conversation */
@@ -91,6 +95,9 @@ export interface Conversation {
  * Supported export formats
  */
 export type ExportFormat = 'pdf' | 'markdown'
+
+/** Visual treatment for PDF and rendered preview output. */
+export type PdfStyle = 'minimal' | 'classic'
 
 /**
  * Options for exporting a conversation
@@ -115,6 +122,16 @@ export interface ExportOptions {
   filenamePattern?: string
   /** Use bounded lower-cost rendering when exporting many PDFs. */
   pdfRenderMode?: 'quality' | 'bulk'
+  /** Add a selectable Unicode text layer to PDF pages for sharp search/copy. */
+  pdfTextLayer?: boolean
+  /** PDF visual treatment. Defaults to the centered, neutral minimal layout. */
+  pdfStyle?: PdfStyle
+  /** Optional assistant heading override; blank means provider/model label. */
+  assistantDisplayName?: string
+  /** Show per-message timestamps when the provider supplied them. */
+  showMessageTimestamps?: boolean
+  /** Locale for generated export labels and date formatting. */
+  locale?: Locale
 }
 
 /**
@@ -129,6 +146,12 @@ export interface ConversationListItem {
   messageCount?: number
   /** Optional: creation timestamp */
   createdAt?: number
+  /**
+   * Provider list timestamp for the most recent activity. Kept separate from
+   * createdAt so a provider's list ordering metadata is never presented as an
+   * exact conversation-start date.
+   */
+  updatedAt?: number
 }
 
 /**
@@ -139,7 +162,7 @@ export interface BulkExportProgress {
   completed: number
   failed: number
   current: string // title of current conversation being exported
-  status: 'idle' | 'fetching' | 'exporting' | 'done' | 'error'
+  status: 'idle' | 'fetching' | 'exporting' | 'done' | 'cancelled' | 'error'
 }
 
 /**
@@ -155,40 +178,16 @@ export interface FilenameOption {
  * Available filename template variables
  */
 export const FILENAME_OPTIONS: FilenameOption[] = [
-  { key: 'date', label: 'Export Date (YYYY-MM-DD)', example: '2026-06-11' },
-  { key: 'datetime', label: 'Export Date & Time', example: '2026-06-11T143022' },
-  { key: 'end_date', label: 'Current/Export Date', example: '2026-06-11' },
-  { key: 'conv_date', label: 'Conversation Date (start)', example: '2026-05-20' },
-  { key: 'conv_datetime', label: 'Conversation Date & Time (start)', example: '2026-05-20T103000' },
+  { key: 'date', label: 'Conversation Date (start)', example: '2026-05-20' },
+  { key: 'datetime', label: 'Conversation Date & Time (start)', example: '2026-05-20T093000' },
+  { key: 'end_date', label: 'Export Date (YYYY-MM-DD)', example: '2026-06-11' },
+  { key: 'conv_date', label: 'Conversation Date (start, alias)', example: '2026-05-20' },
+  { key: 'conv_datetime', label: 'Conversation Date & Time (start, alias)', example: '2026-05-20T093000' },
   { key: 'title', label: 'Conversation Title', example: 'my-chat-about-python' },
   { key: 'platform', label: 'Platform', example: 'chatgpt' },
   { key: 'index', label: 'Number (for bulk)', example: '001' },
   { key: 'msgcount', label: 'Message Count', example: '24' },
 ]
-
-/**
- * Platform parser interface
- */
-export interface PlatformParser {
-  /** The platform this parser handles */
-  platform: 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok'
-  
-  /**
-   * Parse the current conversation from the DOM
-   * @returns Promise resolving to the parsed conversation or null
-   */
-  parseCurrentConversation(): Promise<Conversation | null>
-  
-  /**
-   * Check if the current page is a conversation page
-   */
-  isConversationPage(): boolean
-  
-  /**
-   * Get the title of the current conversation
-   */
-  getConversationTitle(): string
-}
 
 /**
  * Download folder options
@@ -215,12 +214,24 @@ export interface ExtensionSettings {
   downloadFolder: DownloadFolderOption
   /** Custom folder name (used when downloadFolder is 'custom') */
   customFolderName: string
+  /** Open the browser's Save As chooser for interactive exports. */
+  askForSaveLocation: boolean
+  /** In bulk mode, omit conversations already recorded as exported. */
+  skipAlreadyExported: boolean
   /** Whether to export artifacts as separate files */
   exportArtifacts: boolean
   /** Whether to include uploaded file references */
   includeUploadedFiles: boolean
+  /** Default visual treatment for PDF exports and the rendered preview */
+  pdfStyle: PdfStyle
+  /** Whether PDF exports include a Unicode searchable/copyable text layer */
+  pdfTextLayer: boolean
+  /** Optional assistant heading override; blank means provider/model label. */
+  assistantDisplayName: string
+  /** Whether per-message timestamps are shown when available. */
+  showMessageTimestamps: boolean
   /** UI language */
-  locale: 'en' | 'zh-CN' | 'zh-TW'
+  locale: Locale
   /** Scheduled export configuration */
   scheduledExport?: ScheduledExportSettings
 }
@@ -238,14 +249,31 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   filenamePattern: '{date}-{title}',
   downloadFolder: 'default',
   customFolderName: 'AI Chat Exports',
+  askForSaveLocation: false,
+  skipAlreadyExported: true,
   exportArtifacts: true,
-  includeUploadedFiles: true
+  includeUploadedFiles: true,
+  pdfStyle: 'minimal',
+  pdfTextLayer: true,
+  assistantDisplayName: '',
+  showMessageTimestamps: true
 }
+
+/**
+ * Merge persisted settings with defaults so older records receive newly added
+ * export preferences.
+ */
+export function mergeExtensionSettings(
+  settings?: Partial<ExtensionSettings>
+): ExtensionSettings {
+  return { ...DEFAULT_SETTINGS, ...(settings || {}) }
+}
+
 /** Supported platforms for scheduled export */
 export type ExportablePlatform = 'chatgpt' | 'claude' | 'gemini' | 'deepseek' | 'grok'
 
 /** Schedule frequency options */
-export type ScheduleFrequency = 'hourly' | 'every6h' | 'daily' | 'weekly'
+export type ScheduleFrequency = 'hourly' | 'every6h' | 'daily' | 'weekly' | 'custom'
 
 /** Scheduled export configuration for a single platform */
 export interface PlatformScheduleConfig {
@@ -255,14 +283,34 @@ export interface PlatformScheduleConfig {
   frequency: ScheduleFrequency
   /** Max conversations to export per run (prevents runaway exports) */
   maxPerRun: number
+  /**
+   * Maximum detail reads allowed to overlap for this provider. A higher value
+   * can improve throughput, but each provider applies its own rate limits.
+   */
+  maxConcurrentConversations: number
   /** Export format override (falls back to defaultFormat) */
   format?: ExportFormat
+  /**
+   * Optional local wall-clock time (HH:mm) for daily and weekly schedules.
+   * When omitted, those schedules retain their legacy relative-interval
+   * behavior so existing users are not silently moved to a new run time.
+   */
+  timeOfDay?: string
+  /** Local Sunday-first weekday (0–6) used by weekly schedules. */
+  dayOfWeek?: number
+  /**
+   * Custom rolling interval in minutes. Used only when `frequency` is
+   * `custom`; values are clamped by the scheduler before they are persisted.
+   */
+  intervalMinutes?: number
 }
 
 /** Complete scheduled export settings */
 export interface ScheduledExportSettings {
   /** Whether scheduled export is globally enabled */
   enabled: boolean
+  /** How often the background worker wakes up to inspect due platforms. */
+  checkIntervalMinutes: number
   /** Per-platform schedule configurations */
   platforms: Record<ExportablePlatform, PlatformScheduleConfig>
   /** Export format for scheduled exports (default: markdown) */
@@ -273,6 +321,8 @@ export interface ScheduledExportSettings {
   requestDelayMs: number
   /** Max total conversations across all platforms per run */
   maxTotalPerRun: number
+  /** Number of provider workers allowed to run at the same time (1–3). */
+  maxConcurrentPlatforms: number
 }
 
 /** Record of a single exported conversation (for dedup tracking) */
@@ -289,8 +339,38 @@ export interface ExportedConversationRecord {
   filename: string
 }
 
+/** Safe, aggregate reasons a scheduled export can fail. Never store chat text or titles here. */
+export type ScheduledExportFailureReason =
+  | 'rate_limited'
+  | 'authentication_required'
+  | 'detail_unavailable'
+  | 'detail_incomplete'
+  | 'fallback_unavailable'
+  | 'fallback_incomplete'
+  | 'serialization_failed'
+  | 'download_request_failed'
+  | 'download_interrupted'
+  | 'download_timed_out'
+  | 'history_write_failed'
+
+/** Safe provider-level state from the most recent scheduled check. */
+export type ScheduledExportPlatformState =
+  | 'ready'
+  | 'auth_required'
+  | 'rate_limited'
+  | 'error'
+
+export interface ScheduledExportPlatformStatus {
+  /** The last safe state observed for this provider. */
+  state: ScheduledExportPlatformState
+  /** When the provider check produced this state. */
+  checkedAt: number
+}
+
 /** Status of the last scheduled export run */
 export interface ScheduledExportStatus {
+  /** Opaque identifier for the active run. It contains no conversation data. */
+  runId?: string
   /** When the last run started */
   lastRunAt?: number
   /** When the last run finished */
@@ -299,42 +379,33 @@ export interface ScheduledExportStatus {
   lastRunExported: number
   /** Total conversations that failed in last run */
   lastRunFailed: number
+  /** Aggregate failure categories for the last run, with no conversation identifiers or content. */
+  lastRunFailureBreakdown?: Partial<Record<ScheduledExportFailureReason, number>>
+  /** Conversations rescued by opening their own inactive page after API detail was incomplete. */
+  lastRunFallbackRecovered?: number
+  /** Providers that rate limited this run. Names only; never chat data or raw provider errors. */
+  lastRunRateLimitedPlatforms?: ExportablePlatform[]
+  /** Last safe authentication/request state for each provider. */
+  platformStatuses?: Partial<Record<ExportablePlatform, ScheduledExportPlatformStatus>>
   /** Any error message from the last run */
   lastRunError?: string
   /** Currently running? */
   isRunning: boolean
   /** Which platform is currently being processed */
   currentPlatform?: ExportablePlatform
+  /** Providers currently active in this run. `currentPlatform` remains for older UI clients. */
+  activePlatforms?: ExportablePlatform[]
+  /** True when a user stopped the run before its queue was exhausted. */
+  lastRunCancelled?: boolean
+  /** A stop request was accepted and the queue is unwinding. */
+  stopRequested?: boolean
 }
-
-/** Message types for communication between components */
-export type MessageType = 
-  | 'PARSE_CONVERSATION'
-  | 'CONVERSATION_PARSED'
-  | 'EXPORT_REQUEST'
-  | 'EXPORT_COMPLETE'
-  | 'GET_SETTINGS'
-  | 'SETTINGS_UPDATED'
-  | 'DETECT_PLATFORM'
-  | 'PLATFORM_DETECTED'
-  | 'FETCH_CONVERSATION_LIST'
-  | 'CONVERSATION_LIST_FETCHED'
-  | 'FETCH_ALL_CONVERSATIONS'
-  | 'ALL_CONVERSATIONS_FETCHED'
-  | 'FETCH_CONVERSATION_DETAIL'
-  | 'FETCH_CONVERSATION_DETAIL_IN_BACKGROUND_TAB'
-  | 'BULK_EXPORT'
-  | 'BULK_EXPORT_PROGRESS'
-  | 'SCHEDULED_EXPORT_RUN'
-  | 'SCHEDULED_EXPORT_STATUS'
-  | 'SCHEDULED_EXPORT_CONFIG'
-  | 'SCHEDULED_EXPORT_CLEAR_HISTORY'
 
 /**
  * Message payload interface
  */
 export interface MessagePayload<T = unknown> {
-  type: MessageType
+  type: string
   data?: T
   error?: string
 }

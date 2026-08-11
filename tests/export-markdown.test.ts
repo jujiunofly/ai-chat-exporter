@@ -157,6 +157,48 @@ describe('Export Markdown', () => {
       expect(markdown).toContain('Exported from Google Gemini')
     })
 
+    it('localizes generated document labels and suppresses unsafe attachment URLs', () => {
+      const conv = createConversation({
+        title: '',
+        messages: [
+          { id: 'm1', role: 'user', content: '你好' },
+          {
+            id: 'm2',
+            role: 'system',
+            content: '规则',
+            attachments: [{ type: 'link', url: 'javascript:alert(1)' }]
+          }
+        ]
+      })
+
+      const markdown = conversationToMarkdown(conv, { ...defaultOptions, locale: 'zh-CN' })
+
+      expect(markdown).toContain('# 未命名对话')
+      expect(markdown).toContain('## 元数据')
+      expect(markdown).toContain('**平台:** ChatGPT')
+      expect(markdown).toContain('### 👤 用户')
+      expect(markdown).toContain('### ⚙️ 系统')
+      expect(markdown).toContain('**附件:**')
+      expect(markdown).toContain('- 附件')
+      expect(markdown).not.toContain('javascript:')
+    })
+
+    it('removes provider-only Grok citation markup while preserving the answer', () => {
+      const conv = createConversation({
+        platform: 'grok',
+        messages: [{
+          id: 'msg-1',
+          role: 'assistant',
+          content: 'Claim.<grok:render card_id="abc"><argument name="citation_id">92</argument></grok:render> Next'
+        }]
+      })
+      const markdown = conversationToMarkdown(conv, defaultOptions)
+
+      expect(markdown).toContain('Claim. Next')
+      expect(markdown).not.toContain('grok:render')
+      expect(markdown).not.toContain('citation_id')
+    })
+
     it('emits a separate "## Artifacts" section when exportArtifacts is true', () => {
       const conv = createConversation({
         messages: [
@@ -431,6 +473,25 @@ describe('Export Markdown', () => {
       const md = conversationToMarkdown(convWithUpload, { ...defaultOptions, includeUploadedFiles: true })
       expect(md).toContain('![shot](https://img.example/shot.png)')
       expect(md).toContain('doc.pdf')
+    })
+
+    it('uses the same uploaded-file rule in the message and Artifacts sections', () => {
+      const off = conversationToMarkdown(convWithUpload, {
+        ...defaultOptions,
+        exportArtifacts: true,
+        includeUploadedFiles: false
+      })
+      const on = conversationToMarkdown(convWithUpload, {
+        ...defaultOptions,
+        exportArtifacts: true,
+        includeUploadedFiles: true
+      })
+
+      expect(off).not.toContain('doc.pdf')
+      expect(off).not.toContain('## Artifacts')
+      expect(on).toContain('doc.pdf')
+      expect(on).toContain('## Artifacts')
+      expect(on).toContain('[doc.pdf](https://files.example/doc.pdf)')
     })
   })
 })

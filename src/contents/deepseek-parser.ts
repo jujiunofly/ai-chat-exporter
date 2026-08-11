@@ -4,10 +4,31 @@
  * - DOM parsing for current conversation page
  * - API-based conversation list fetching (cookie-authenticated)
  */
-import type { Conversation, ChatMessage, PlatformParser, ConversationListItem } from '../lib/types'
-import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
-import { preferMoreCompleteConversation } from '../lib/parser-fallback'
+import type { Conversation, ChatMessage, ConversationListItem } from '../lib/types'
+import { generateId, extractTextContent, extractTextWithMedia, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
+import { registerParserMessageHandler, runParserMain } from '../lib/parser-runtime'
 import { extractApiMessageText, getApiMessageRecords, normalizeApiMessageRole } from '../lib/api-message-normalizer'
+import { isProviderRateLimitError, isRateLimitedResponse, ProviderRateLimitError } from '../lib/provider-rate-limit'
+
+function deepSeekTimestamp(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 10_000_000_000 ? value * 1000 : value
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) return numeric < 10_000_000_000 ? numeric * 1000 : numeric
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? undefined : parsed
+  }
+  return undefined
+}
+
+function deepSeekModelName(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return undefined
+}
 
 export interface DeepSeekHistoryPage {
   items: any[]
@@ -40,8 +61,14 @@ export function parseDeepSeekHistoryPage(data: any): DeepSeekHistoryPage {
 /**
  * DeepSeek parser implementation
  */
-export class DeepSeekParser implements PlatformParser {
+export class DeepSeekParser {
   platform = 'deepseek' as const
+  private authenticationRequired = false
+
+  /** Safe aggregate signal for the scheduled-export status surface. */
+  isAuthenticationRequired(): boolean {
+    return this.authenticationRequired
+  }
 
   /**
    * Check if current page is a DeepSeek conversation
@@ -104,6 +131,10 @@ export class DeepSeekParser implements PlatformParser {
         url: window.location.href,
         messages,
         createdAt: this.extractCreatedAt(),
+        modelName: deepSeekModelName(
+          document.body.getAttribute('data-model'),
+          document.querySelector('[data-model]')?.getAttribute('data-model')
+        ),
         platform: 'deepseek'
       }
     } catch (error) {
@@ -137,7 +168,14 @@ export class DeepSeekParser implements PlatformParser {
           credentials: 'include',
           headers: { 'Accept': 'application/json' }
         })
+        if (isRateLimitedResponse(response)) throw new ProviderRateLimitError()
+        if (response.status === 401 || response.status === 403) {
+          this.authenticationRequired = true
+          throw new Error(`DeepSeek history request failed: ${response.status}`)
+        }
         if (!response.ok) throw new Error(`DeepSeek history request failed: ${response.status}`)
+
+        this.authenticationRequired = false
 
         const pageData = parseDeepSeekHistoryPage(await response.json())
         for (const item of pageData.items) {
@@ -165,6 +203,7 @@ export class DeepSeekParser implements PlatformParser {
         if (page === maxPages - 1) throw new Error('DeepSeek history pagination exceeded safe page limit')
       }
     } catch (error) {
+      if (isProviderRateLimitError(error)) throw error
       paginationFailed = true
       console.error('[DeepSeek Parser] Error fetching conversations:', error)
     }
@@ -194,6 +233,10 @@ export class DeepSeekParser implements PlatformParser {
         }
       )
 
+      if (isRateLimitedResponse(response)) {
+        throw new ProviderRateLimitError()
+      }
+
       if (!response.ok) {
         console.error(`[DeepSeek Parser] Failed to fetch conversation ${id}: ${response.status}`)
         return null
@@ -211,7 +254,11 @@ export class DeepSeekParser implements PlatformParser {
             messages.push({
               id: typeof item.id === 'string' ? item.id : generateId(),
               role,
-              content: cleanText(content)
+              content: cleanText(content),
+              timestamp: deepSeekTimestamp(
+                item.created_at ?? item.createdAt ?? item.create_time ??
+                (item.message as any)?.created_at
+              )
             })
           }
         }
@@ -222,10 +269,12 @@ export class DeepSeekParser implements PlatformParser {
         title: data.title || this.getConversationTitle(),
         url: `https://chat.deepseek.com/a/chat/s/${id}`,
         messages,
-        createdAt: data.created_at ? new Date(data.created_at).getTime() : undefined,
+        createdAt: deepSeekTimestamp(data.created_at ?? data.createdAt ?? data.create_time),
+        modelName: deepSeekModelName(data.model, data.model_name, data.modelName, data.model_slug),
         platform: 'deepseek'
       }
     } catch (error) {
+      if (isProviderRateLimitError(error)) throw error
       console.error(`[DeepSeek Parser] Error fetching conversation detail:`, error)
       return null
     }
@@ -341,7 +390,8 @@ export class DeepSeekParser implements PlatformParser {
     const attachments = imageData.map(img => ({
       type: 'image' as const,
       url: img.url,
-      name: img.alt
+      name: img.alt,
+      uploaded: role === 'user'
     }))
 
     const messageId = element.getAttribute('data-message-id') || generateId()
@@ -351,7 +401,12 @@ export class DeepSeekParser implements PlatformParser {
       role,
       content,
       attachments: attachments.length > 0 ? attachments : undefined,
-      codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined
+      codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
+      timestamp: deepSeekTimestamp(
+        element.querySelector('time[datetime]')?.getAttribute('datetime')
+          || element.getAttribute('data-timestamp')
+          || element.getAttribute('data-created-at')
+      )
     }
   }
 
@@ -428,8 +483,7 @@ export class DeepSeekParser implements PlatformParser {
       '.markdown, [class*="markdown"], [class*="content"], [class*="text"]'
     ) || clone
 
-    const text = extractTextContent(contentElement)
-    return cleanText(text)
+    return cleanText(extractTextWithMedia(contentElement))
   }
 
   /**
@@ -504,83 +558,13 @@ export const config = {
   matches: ['https://deepseek.com/*', 'https://chat.deepseek.com/*']
 }
 
-// Main function to run when script loads
-async function main() {
-  if (parser.isConversationPage()) {
-    const conversation = await parser.parseCurrentConversation()
-    if (conversation) {
-      chrome.storage.local.set({
-        [`conversation-${conversation.id}`]: { ...conversation, timestamp: Date.now() }
-      })
-    }
-  }
-}
-
-// Listen for messages from popup
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'PARSE_CONVERSATION') {
-    parser.parseCurrentConversation().then(conversation => {
-      // API detail is preferred when available because it preserves markdown,
-      // LaTeX, artifacts, and paragraph structure better than DOM text extraction.
-      const url = window.location.href
-      const match = url.match(/\/a\/chat\/s\/([a-f0-9-]+)/) || url.match(/\/chat\/([a-f0-9-]+)/)
-      if (match) {
-        parser.fetchConversationDetail(match[1]).then(apiConv => {
-          sendResponse({ data: preferMoreCompleteConversation(conversation, apiConv) })
-        }).catch(() => {
-          sendResponse({ data: conversation })
-        })
-      } else {
-        sendResponse({ data: conversation })
-      }
-    }).catch(error => {
-      sendResponse({ error: error.message })
-    })
-    return true // Keep message channel open
-  }
-
-  if (message.type === 'DETECT_PLATFORM') {
-    sendResponse({
-      data: {
-        platform: 'deepseek',
-        isConversationPage: parser.isConversationPage(),
-        title: parser.getConversationTitle()
-      }
-    })
-  }
-
-  if (message.type === 'FETCH_CONVERSATION_LIST') {
-    try {
-      const list = parser.getConversationList()
-      sendResponse({ data: list })
-    } catch (error) {
-      sendResponse({ error: (error as Error).message })
-    }
-  }
-
-  if (message.type === 'FETCH_ALL_CONVERSATIONS') {
-    parser.fetchAllConversations().then(list => {
-      sendResponse({ data: list })
-    }).catch(error => {
-      try {
-        const fallbackList = parser.getConversationList()
-        sendResponse({ data: fallbackList })
-      } catch (e) {
-        sendResponse({ error: (error as Error).message })
-      }
-    })
-    return true
-  }
-
-  if (message.type === 'FETCH_CONVERSATION_DETAIL') {
-    parser.fetchConversationDetail(message.data?.id).then(conversation => {
-      sendResponse({ data: conversation })
-    }).catch(error => {
-      sendResponse({ error: error.message })
-    })
-    return true
-  }
+// Register the shared popup-message handler (see src/lib/parser-runtime.ts)
+registerParserMessageHandler({
+  platform: 'deepseek',
+  parser,
+  extractConversationId: url =>
+    (url.match(/\/a\/chat\/s\/([a-f0-9-]+)/) || url.match(/\/chat\/([a-f0-9-]+)/))?.[1] ?? null
 })
 
 // Run on page load
-main()
+runParserMain(parser)

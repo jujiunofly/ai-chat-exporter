@@ -1,9 +1,11 @@
 /**
  * ExportButton Component
- * Gemini-inspired button with spinner and success states
+ * Single primary action per context, with spinner and success states
  */
 
 import React from 'react'
+import { DownloadIcon } from './icons'
+import { t, type Locale } from '../lib/i18n'
 
 interface ExportButtonProps {
   onClick: () => void
@@ -13,20 +15,13 @@ interface ExportButtonProps {
   className?: string
   text?: string
   isSuccess?: boolean
+  locale?: Locale
 }
 
 /** Inline SVG Icons */
 const CheckIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="20 6 9 17 4 12"></polyline>
-  </svg>
-)
-
-const DownloadIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-    <polyline points="7 10 12 15 17 10"></polyline>
-    <line x1="12" y1="15" x2="12" y2="3"></line>
   </svg>
 )
 
@@ -40,9 +35,11 @@ export function ExportButton({
   format,
   className = '',
   text,
-  isSuccess = false
+  isSuccess = false,
+  locale = 'en'
 }: ExportButtonProps) {
-  const defaultText = text || `Export as ${format === 'pdf' ? 'PDF' : 'Markdown'}`
+  const formatLabelKey = format === 'pdf' ? 'Export as PDF' : 'Export as Markdown'
+  const defaultText = text || t(formatLabelKey, locale)
 
   let content: React.ReactNode
   let btnClass = `btn btn-primary ${className}`
@@ -51,14 +48,14 @@ export function ExportButton({
     content = (
       <>
         <span className="spinner" />
-        <span>Exporting...</span>
+        <span>{t('Exporting...', locale)}</span>
       </>
     )
   } else if (isSuccess) {
     content = (
       <>
         <CheckIcon />
-        <span>Export Successful</span>
+        <span>{t('Export Successful', locale)}</span>
       </>
     )
     btnClass += ' success'
@@ -76,12 +73,9 @@ export function ExportButton({
       onClick={onClick}
       disabled={disabled || loading || isSuccess}
       className={btnClass}
-      style={isSuccess ? { backgroundColor: 'var(--success)' } : {}}
-      aria-label={`Export as ${format === 'pdf' ? 'PDF' : 'Markdown'}`}
+      aria-label={t(formatLabelKey, locale)}
     >
       {content}
     </button>
   )
 }
-
-export default ExportButton

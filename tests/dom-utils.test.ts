@@ -7,12 +7,12 @@ import {
   generateId,
   extractTextContent,
   extractTextWithBreaks,
+  extractTextWithMedia,
   extractCodeBlocks,
   extractImages,
-  extractLinks,
   cleanText,
-  escapeHtml,
-  isElementVisible
+  stripProviderArtifacts,
+  escapeHtml
 } from '../src/lib/dom-utils'
 
 describe('DOM Utilities', () => {
@@ -129,6 +129,24 @@ describe('DOM Utilities', () => {
     })
   })
 
+  describe('extractTextWithMedia', () => {
+    it('keeps an image between the surrounding transcript blocks', () => {
+      document.body.innerHTML = `
+        <div id="answer">
+          <p>Before the place card.</p>
+          <img data-original="https://images.example/store-full.png" src="placeholder.png" alt="Storefront" />
+          <p>After the place card.</p>
+        </div>
+      `
+
+      const text = extractTextWithMedia(document.querySelector('#answer'))
+
+      expect(text).toContain('![Storefront](https://images.example/store-full.png)')
+      expect(text.indexOf('Before the place card.')).toBeLessThan(text.indexOf('![Storefront]'))
+      expect(text.indexOf('![Storefront]')).toBeLessThan(text.indexOf('After the place card.'))
+    })
+  })
+
   describe('extractCodeBlocks', () => {
     it('should extract code blocks from pre elements', () => {
       document.body.innerHTML = '<pre><code>const x = 1;</code></pre>'
@@ -232,57 +250,21 @@ describe('DOM Utilities', () => {
       expect(images.length).toBe(1)
       expect(images[0].url).toContain('lazy.png')
     })
-  })
 
-  describe('extractLinks', () => {
-    it('should extract links', () => {
-      document.body.innerHTML = '<a href="https://example.com">Example</a>'
-      const container = document.body
-      
-      const links = extractLinks(container)
-      
-      expect(links.length).toBe(1)
-      expect(links[0].url).toBe('https://example.com')
-      expect(links[0].text).toBe('Example')
+    it('prefers a full-resolution lazy source over a transparent placeholder', () => {
+      document.body.innerHTML = '<img src="placeholder.png" data-original="https://images.example/full.png" alt="Full image">'
+
+      expect(extractImages(document.body)).toEqual([
+        { url: 'https://images.example/full.png', alt: 'Full image' }
+      ])
     })
 
-    it('should skip links without href', () => {
-      document.body.innerHTML = '<a>No href</a>'
-      const container = document.body
-      
-      const links = extractLinks(container)
-      
-      expect(links.length).toBe(0)
-    })
+    it('uses the largest srcset candidate when that is the only real source', () => {
+      document.body.innerHTML = '<img src="transparent.gif" srcset="https://images.example/preview.png 1x, https://images.example/full.png 2x">'
 
-    it('should skip empty links', () => {
-      document.body.innerHTML = '<a href="https://example.com"></a>'
-      const container = document.body
-      
-      const links = extractLinks(container)
-      
-      expect(links.length).toBe(0)
-    })
-
-    it('should handle multiple links', () => {
-      document.body.innerHTML = `
-        <a href="url1">Link 1</a>
-        <a href="url2">Link 2</a>
-      `
-      const container = document.body
-      
-      const links = extractLinks(container)
-      
-      expect(links.length).toBe(2)
-    })
-
-    it('should handle nested links', () => {
-      document.body.innerHTML = '<div><a href="https://example.com">Click here</a></div>'
-      const container = document.body
-      
-      const links = extractLinks(container)
-      
-      expect(links.length).toBe(1)
+      expect(extractImages(document.body)).toEqual([
+        { url: 'https://images.example/full.png', alt: '' }
+      ])
     })
   })
 
@@ -311,8 +293,23 @@ describe('DOM Utilities', () => {
       expect(cleanText('Claim\uE200cite\uE202turn400395view0\uE201 continues')).toBe('Claim continues')
     })
 
+    it('removes Grok citation-card markup', () => {
+      expect(cleanText('Claim.<grok:render card_id="abc"><argument name="citation_id">92</argument></grok:render> Next')).toBe('Claim. Next')
+    })
+
     it('should trim leading and trailing whitespace', () => {
       expect(cleanText('  Hello  ')).toBe('Hello')
+    })
+  })
+
+  describe('stripProviderArtifacts', () => {
+    it('removes Grok markup without changing Markdown whitespace', () => {
+      expect(stripProviderArtifacts('A\n\n| A | B |\n| --- | --- |\n| 1 | 2 |')).toBe('A\n\n| A | B |\n| --- | --- |\n| 1 | 2 |')
+    })
+
+    it('removes ChatGPT internal image handles without removing nearby prose', () => {
+      expect(stripProviderArtifacts('Before iturn447234image0 after')).toBe('Before  after')
+      expect(cleanText('Before iturn447234image0 after')).toBe('Before after')
     })
   })
 
@@ -341,48 +338,6 @@ describe('DOM Utilities', () => {
 
     it('should return unchanged text without special characters', () => {
       expect(escapeHtml('Hello World')).toBe('Hello World')
-    })
-  })
-
-  describe('isElementVisible', () => {
-    it('should return true for visible elements', () => {
-      document.body.innerHTML = '<div style="display: block;">Visible</div>'
-      const element = document.querySelector('div')
-      
-      expect(isElementVisible(element!)).toBe(true)
-    })
-
-    it('should return false for hidden elements', () => {
-      document.body.innerHTML = '<div style="display: none;">Hidden</div>'
-      const element = document.querySelector('div')
-      
-      expect(isElementVisible(element!)).toBe(false)
-    })
-
-    it('should return false for elements with visibility hidden', () => {
-      document.body.innerHTML = '<div style="visibility: hidden;">Hidden</div>'
-      const element = document.querySelector('div')
-      
-      expect(isElementVisible(element!)).toBe(false)
-    })
-
-    it('should return false for elements with opacity 0', () => {
-      document.body.innerHTML = '<div style="opacity: 0;">Transparent</div>'
-      const element = document.querySelector('div')
-      
-      expect(isElementVisible(element!)).toBe(false)
-    })
-
-    it('should handle null element', () => {
-      // In jsdom, getComputedStyle throws on null
-      // The function should handle this gracefully
-      try {
-        const result = isElementVisible(null as any)
-        expect(result).toBe(false)
-      } catch {
-        // Expected behavior in jsdom
-        expect(true).toBe(true)
-      }
     })
   })
 })

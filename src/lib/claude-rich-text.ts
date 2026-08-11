@@ -7,6 +7,8 @@
  * it reaches the Markdown/PDF exporters.
  */
 
+import { extractImage } from './dom-utils'
+
 type RecordLike = Record<string, any>
 
 const BLOCK_TAGS = new Set([
@@ -173,7 +175,13 @@ function renderNode(node: Node, inline = false): string {
     const target = safeLinkTarget(element.getAttribute('href') || '')
     return label && target ? `[${label}](${target})` : label
   }
-  if (tag === 'img') return ''
+  if (tag === 'img') {
+    const image = extractImage(element as HTMLImageElement)
+    if (!image) return ''
+    const alt = (image.alt || 'Image').replace(/[\r\n\[\]]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Image'
+    const url = image.url.replace(/\)/g, '%29').replace(/\s/g, '%20')
+    return `\n\n![${alt}](${url})\n\n`
+  }
   if (tag === 'hr') return '\n\n---\n\n'
   if (tag === 'blockquote') {
     const value = normalizeClaudeMarkdown(Array.from(element.childNodes).map(child => renderNode(child)).join(' '))

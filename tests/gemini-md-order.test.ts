@@ -18,6 +18,7 @@ vi.mock('../src/lib/dom-utils', () => ({
   })(),
   extractTextContent: (element: Element | null) => element?.textContent?.trim() || '',
   extractTextWithBreaks: (element: Element | null) => element?.textContent?.trim() || '',
+  extractTextWithMedia: (element: Element | null) => element?.textContent?.trim() || '',
   extractCodeBlocks: () => [],
   extractImages: () => [],
   cleanText: (text: string) => text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
@@ -137,6 +138,20 @@ describe('GeminiParser message ordering', () => {
     const assistant = conversation!.messages.find(m => m.role === 'assistant')!
     expect(assistant.content).toContain('Paris is the capital of France')
     expect(assistant.content).not.toMatch(/gemini said/i)
+  })
+
+  it('keeps an accessible Gemini Maps card label such as Nikon repair in the transcript', () => {
+    document.body.innerHTML = `
+      <div id="answer">
+        <p>Nearby repair options:</p>
+        <a href="https://www.google.com/maps/place/Nikon" aria-label="Nikon repair shop · 4.6 · Camera repair service">
+          <img src="https://images.example/nikon.png" alt="Nikon repair shop" />
+        </a>
+      </div>
+    `
+
+    ;(parser as any).injectPlaceCardLabels(document.querySelector('#answer'))
+    expect(document.querySelector('#answer')?.textContent).toContain('Nikon repair shop · 4.6 · Camera repair service')
   })
 
   it('preserves real multi-line assistant answers as paragraphs', async () => {

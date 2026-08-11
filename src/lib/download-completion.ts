@@ -3,12 +3,39 @@
  * file is complete. A download id only means that the transfer was queued;
  * callers must await this helper before recording export history.
  */
+import { EXPORT_CANCELLED_MESSAGE } from './export-cancel'
+
+export interface DownloadWaitControl {
+  /** Stops an in-flight transfer when the caller cancels its export queue. */
+  signal?: AbortSignal
+  /** Lets a coordinator durably retain the browser download id before waiting. */
+  onStarted?: (downloadId: number) => void | Promise<void>
+}
+
 export async function downloadAndWait(
   options: chrome.downloads.DownloadOptions,
   timeoutMs = 60_000,
-  downloadsApi: typeof chrome.downloads = chrome.downloads
+  downloadsApi: typeof chrome.downloads = chrome.downloads,
+  control: DownloadWaitControl = {}
 ): Promise<number> {
+  const { signal, onStarted } = control
+  if (signal?.aborted) throw new Error(EXPORT_CANCELLED_MESSAGE)
+
   const downloadId = await downloadsApi.download(options)
+  const started = onStarted?.(downloadId)
+  if (started) await started
+
+  const cancelDownload = () => {
+    if (!downloadsApi.cancel) return
+    Promise.resolve(downloadsApi.cancel(downloadId)).catch(() => {
+      // A data URL can complete before cancellation reaches the browser.
+    })
+  }
+
+  if (signal?.aborted) {
+    cancelDownload()
+    throw new Error(EXPORT_CANCELLED_MESSAGE)
+  }
 
   // Some unit-test/browser shims expose download() but not onChanged. Keep a
   // compatibility path for those environments; real extension manifests
@@ -21,6 +48,7 @@ export async function downloadAndWait(
 
     const cleanup = () => {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       try {
         downloadsApi.onChanged.removeListener(onChanged)
       } catch {
@@ -50,7 +78,17 @@ export async function downloadAndWait(
       if (delta.state?.current === 'complete') finish()
     }
 
+    const onAbort = () => {
+      cancelDownload()
+      finish(new Error(EXPORT_CANCELLED_MESSAGE))
+    }
+
     downloadsApi.onChanged.addListener(onChanged)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
 
     // The event can fire before the listener is attached, especially for a
     // small data URL. Search the item once to close that race window.

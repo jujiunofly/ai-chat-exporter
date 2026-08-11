@@ -69,11 +69,13 @@ The PDF suite can report jsdom limitations around `getComputedStyle` or
 
 ## 4. CI and release automation
 
-`.github/workflows/ci.yml` runs `npm ci`, tests, lint, and the browser build on
+`.github/workflows/ci.yml` runs `npm ci`, tests, lint, the production dependency
+audit, and the browser build on
 pull requests and pushes to `main` using Node 20.
 
-`.github/workflows/release.yml` supports either a manual dispatch or a `v*`
-tag push. A tag-triggered release fails unless the tag exactly equals
+`.github/workflows/release.yml` runs the same production dependency audit before
+packaging, then supports either a manual dispatch or a `v*` tag push. A
+tag-triggered release fails unless the tag exactly equals
 `v${package.json version}`. Manual dispatch resolves that same tag, creates it
 only when absent, and fails if an existing tag points at another commit. The
 workflow serializes releases to prevent concurrent manual and tag-triggered

@@ -1,9 +1,12 @@
 import type { ChatMessage, Conversation, ConversationListItem } from './types'
+import { cleanText } from './dom-utils'
+import { isProviderRateLimitError, isRateLimitedResponse, ProviderRateLimitError } from './provider-rate-limit'
 
 type JsonRecord = Record<string, unknown>
 
 type FetchResponse = {
   ok: boolean
+  status?: number
   json: () => Promise<unknown>
 }
 
@@ -21,8 +24,14 @@ function nonEmptyString(value: unknown): string | null {
 }
 
 function timestamp(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 10_000_000_000 ? value * 1000 : value
+  }
   const date = nonEmptyString(value)
   if (!date) return undefined
+
+  const numeric = Number(date)
+  if (Number.isFinite(numeric)) return numeric < 10_000_000_000 ? numeric * 1000 : numeric
 
   const result = new Date(date).getTime()
   return Number.isNaN(result) ? undefined : result
@@ -64,6 +73,8 @@ export async function fetchGrokConversationList(
         credentials: 'include',
         headers: { Accept: 'application/json' }
       })
+      if (isRateLimitedResponse(response)) throw new ProviderRateLimitError()
+      if (response.status === 401 || response.status === 403) throw new Error('Authentication required')
       if (!response.ok) return []
 
       const payload = await response.json()
@@ -89,7 +100,9 @@ export async function fetchGrokConversationList(
       seenPageTokens.add(nextPageToken)
       pageToken = nextPageToken
     }
-  } catch {
+  } catch (error) {
+    if (isProviderRateLimitError(error)) throw error
+    if (error instanceof Error && error.message === 'Authentication required') throw error
     return []
   }
 
@@ -119,6 +132,7 @@ export async function fetchGrokConversationDetail(
       `https://grok.com/rest/app-chat/conversations_v2/${encodedId}`,
       requestInit
     )
+    if (isRateLimitedResponse(detailResponse)) throw new ProviderRateLimitError()
     if (!detailResponse.ok) return null
 
     const detailPayload = await detailResponse.json()
@@ -132,6 +146,7 @@ export async function fetchGrokConversationDetail(
       `https://grok.com/rest/app-chat/conversations/${encodedId}/response-node`,
       requestInit
     )
+    if (isRateLimitedResponse(nodeResponse)) throw new ProviderRateLimitError()
     if (!nodeResponse.ok) return null
 
     const nodePayload = await nodeResponse.json()
@@ -155,6 +170,7 @@ export async function fetchGrokConversationDetail(
         body: JSON.stringify({ responseIds })
       }
     )
+    if (isRateLimitedResponse(messagesResponse)) throw new ProviderRateLimitError()
     if (!messagesResponse.ok) return null
 
     const messagesPayload = await messagesResponse.json()
@@ -173,8 +189,14 @@ export async function fetchGrokConversationDetail(
       if (!response) continue
 
       const role = responseRole(response.sender)
-      const content = nonEmptyString(response.message)
-      if (!role || !content) continue
+      const rawContent = nonEmptyString(response.message)
+      if (!role || !rawContent) continue
+
+      // Grok's API sometimes embeds citation-card XML in the message body.
+      // Keep the Markdown, but remove provider-only UI markup before the
+      // conversation reaches any export format.
+      const content = cleanText(rawContent)
+      if (!content) continue
 
       messages.push({
         id: responseId,
@@ -192,9 +214,14 @@ export async function fetchGrokConversationDetail(
       url: `https://grok.com/c/${encodedId}`,
       messages,
       createdAt: timestamp(detail.createTime),
+      modelName: nonEmptyString(detail.modelName)
+        || nonEmptyString(detail.model)
+        || nonEmptyString(detail.model_name)
+        || undefined,
       platform: 'grok'
     }
-  } catch {
+  } catch (error) {
+    if (isProviderRateLimitError(error)) throw error
     return null
   }
 }

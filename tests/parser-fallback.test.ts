@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shouldUseApiFallback, preferMoreCompleteConversation } from '../src/lib/parser-fallback'
+import { mergeRenderedImageAttachments, shouldUseApiFallback, preferMoreCompleteConversation } from '../src/lib/parser-fallback'
 import type { Conversation } from '../src/lib/types'
 
 const conv = (messages: Conversation['messages']): Conversation => ({
@@ -86,5 +86,75 @@ describe('parser API fallback decision', () => {
     ])
     const api = conv([{ id: 'u1', role: 'user', content: 'Question' }])
     expect(preferMoreCompleteConversation(dom, api)).toBe(dom)
+  })
+
+  it('merges a DOM image into the matching API message without changing API text or order', () => {
+    const api = conv([
+      { id: 'u1', role: 'user', content: 'Question' },
+      { id: 'a1', role: 'assistant', content: 'iturn447234image0\n\nAnswer with a rendered image.' }
+    ])
+    const dom = conv([
+      { id: 'u1', role: 'user', content: 'Question' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Answer with a rendered image.',
+        attachments: [{ type: 'image', url: 'https://images.example/chart.png', name: 'Chart' }]
+      }
+    ])
+
+    const merged = mergeRenderedImageAttachments(api, dom)
+
+    expect(merged?.messages).toHaveLength(2)
+    expect(merged?.messages[1].content).toContain('iturn447234image0')
+    expect(merged?.messages[1].attachments).toEqual([
+      { type: 'image', url: 'https://images.example/chart.png', name: 'Chart' }
+    ])
+  })
+
+  it('returns a DOM image to its paragraph position when richer API text has no image handle', () => {
+    const api = conv([
+      { id: 'u1', role: 'user', content: 'Question' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '## Repair recommendation\n\n**Nikon repair shop** · 4.6 · Camera repair service\n\nCall before visiting.'
+      }
+    ])
+    const dom = conv([
+      { id: 'u1', role: 'user', content: 'Question' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Repair recommendation\n\nNikon repair shop · 4.6 · Camera repair service\n\n![Nikon repair card](https://images.example/nikon-card.png)\n\nCall before visiting.',
+        attachments: [{ type: 'image', url: 'https://images.example/nikon-card.png', name: 'Nikon repair card' }]
+      }
+    ])
+
+    const merged = mergeRenderedImageAttachments(api, dom)
+    const content = merged?.messages[1].content || ''
+
+    expect(content).toContain('**Nikon repair shop**')
+    expect(content.indexOf('Camera repair service')).toBeLessThan(content.indexOf('![Nikon repair card]'))
+    expect(content.indexOf('![Nikon repair card]')).toBeLessThan(content.indexOf('Call before visiting.'))
+    expect(merged?.messages[1].attachments).toEqual([
+      { type: 'image', url: 'https://images.example/nikon-card.png', name: 'Nikon repair card' }
+    ])
+  })
+
+  it('does not attach a rendered image to a different assistant turn', () => {
+    const api = conv([
+      { id: 'a1', role: 'assistant', content: 'One answer' }
+    ])
+    const dom = conv([
+      {
+        id: 'different',
+        role: 'assistant',
+        content: 'Completely unrelated answer',
+        attachments: [{ type: 'image', url: 'https://images.example/unrelated.png' }]
+      }
+    ])
+
+    expect(mergeRenderedImageAttachments(api, dom)).toBe(api)
   })
 })

@@ -15,5 +15,3 @@ export function Pill({ label, platform, icon, className = '' }: PillProps) {
     </div>
   )
 }
-
-export default Pill

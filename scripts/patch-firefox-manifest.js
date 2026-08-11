@@ -8,7 +8,9 @@
 const fs = require('fs')
 const path = require('path')
 
-const manifestPath = path.join(__dirname, '..', 'build/chrome-mv3-prod/manifest.json')
+const root = path.join(__dirname, '..')
+const buildDir = path.resolve(root, process.env.BUILD_DIR || 'build/chrome-mv3-prod')
+const manifestPath = path.join(buildDir, 'manifest.json')
 const packagePath = path.join(__dirname, '..', 'package.json')
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
 const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'))

@@ -54,6 +54,22 @@ describe('Claude rich text extraction', () => {
     expect(markdown).not.toContain('javascript:')
   })
 
+  it('keeps rendered images inline instead of discarding them from the transcript', () => {
+    document.body.innerHTML = `
+      <div id="answer">
+        <p>Before chart.</p>
+        <img data-original="https://images.example/chart-full.png" src="placeholder.png" alt="Benchmark chart" />
+        <p>After chart.</p>
+      </div>
+    `
+
+    const markdown = claudeElementToMarkdown(document.querySelector('#answer')!)
+
+    expect(markdown).toContain('![Benchmark chart](https://images.example/chart-full.png)')
+    expect(markdown.indexOf('Before chart.')).toBeLessThan(markdown.indexOf('![Benchmark chart]'))
+    expect(markdown.indexOf('![Benchmark chart]')).toBeLessThan(markdown.indexOf('After chart.'))
+  })
+
   it('keeps visible API Markdown while excluding thinking and tool blocks', () => {
     const markdown = extractClaudeMessageMarkdown({
       uuid: 'assistant-1',

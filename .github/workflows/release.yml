@@ -67,6 +67,9 @@ jobs:
       - name: Run lint
         run: npm run lint
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
       - name: Build browser and source packages
         run: npm run build
 
@@ -104,7 +107,7 @@ jobs:
           - `ai-chat-exporter-source.zip` — source archive for Firefox AMO source review (not installable)
 
           ### Validation
-          - Dependencies, tests, and lint run before release packaging.
+          - Dependencies, tests, lint, and the production dependency audit run before release packaging.
           - Packages are generated with `npm run build`.
           EOF
 

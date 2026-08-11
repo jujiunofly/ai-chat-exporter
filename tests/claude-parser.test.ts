@@ -3,12 +3,17 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { ProviderRateLimitError } from '../src/lib/provider-rate-limit'
 
 // Mock DOM utilities
 vi.mock('../src/lib/dom-utils', () => ({
   generateId: () => 'test-id-789',
   extractTextContent: (element: Element | null) => element?.textContent?.trim() || '',
   extractTextWithBreaks: (element: Element | null) => element?.textContent?.trim() || '',
+  extractImage: (element: HTMLImageElement) => {
+    const url = element.getAttribute('src') || ''
+    return url ? { url, alt: element.getAttribute('alt') || '' } : null
+  },
   extractCodeBlocks: () => [],
   extractImages: () => [],
   cleanText: (text: string) => text.replace(/\s+/g, ' ').trim()
@@ -640,5 +645,16 @@ describe('Claude Parser', () => {
       
       expect(validCount).toBe(1)
     })
+  })
+
+  it('surfaces a 429 detail response as the safe rate-limit signal', async () => {
+    const organizationId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ orgID: organizationId }) })
+      .mockResolvedValueOnce({ ok: false, status: 429, json: async () => ({}) }))
+    const { ClaudeParser } = await import('../src/contents/claude-parser')
+
+    await expect(new ClaudeParser().fetchConversationDetail('conversation-id'))
+      .rejects.toBeInstanceOf(ProviderRateLimitError)
   })
 })

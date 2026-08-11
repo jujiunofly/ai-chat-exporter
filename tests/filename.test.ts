@@ -6,6 +6,16 @@ import { describe, it, expect } from 'vitest'
 import { generateFilename, getDefaultPattern, FILENAME_PREVIEW_VARS } from '../src/lib/filename'
 import type { Conversation } from '../src/lib/types'
 
+function localDate(timestamp: number): string {
+  const date = new Date(timestamp)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function localDateTime(timestamp: number): string {
+  const date = new Date(timestamp)
+  return `${localDate(timestamp)}T${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}${String(date.getSeconds()).padStart(2, '0')}`
+}
+
 describe('Filename Generation', () => {
   const createConversation = (overrides: Partial<Conversation> = {}): Conversation => ({
     id: 'test-conv-1',
@@ -20,11 +30,12 @@ describe('Filename Generation', () => {
   })
 
   describe('generateFilename', () => {
-    it('should generate filename with date pattern', () => {
-      const conv = createConversation()
+    it('uses the conversation start date for the default date pattern', () => {
+      const startedAt = new Date(2025, 2, 15, 10, 30, 0).getTime()
+      const conv = createConversation({ createdAt: startedAt })
       const filename = generateFilename('{date}', conv)
       
-      expect(filename).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(filename).toBe(localDate(startedAt))
     })
 
     it('should generate filename with title pattern', () => {
@@ -155,27 +166,30 @@ describe('Filename Generation', () => {
       expect(FILENAME_PREVIEW_VARS.msgcount).toBeDefined()
     })
 
-    it('should generate date preview', () => {
-      const conv = createConversation()
+    it('generates the conversation start date preview', () => {
+      const startedAt = new Date(2025, 2, 15, 10, 30, 0).getTime()
+      const conv = createConversation({ createdAt: startedAt })
       const date = FILENAME_PREVIEW_VARS.date(conv)
       
-      expect(date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(date).toBe(localDate(startedAt))
     })
 
-    it('should generate datetime preview', () => {
-      const conv = createConversation()
+    it('generates the conversation start datetime preview', () => {
+      const startedAt = new Date(2025, 2, 15, 10, 30, 5).getTime()
+      const conv = createConversation({ createdAt: startedAt })
       const datetime = FILENAME_PREVIEW_VARS.datetime(conv)
       
-      // ISO datetime with milliseconds removed, format: YYYY-MM-DDTHHmmss.sssZ -> YYYY-MM-DDTHHmmss
-      expect(datetime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}/)
+      expect(datetime).toBe(localDateTime(startedAt))
     })
 
-    it('should generate end_date preview (same as date)', () => {
-      const conv = createConversation()
+    it('keeps end_date as the export date', () => {
+      const startedAt = new Date(2020, 2, 15, 10, 30, 0).getTime()
+      const conv = createConversation({ createdAt: startedAt })
       const endDate = FILENAME_PREVIEW_VARS.end_date(conv)
       const date = FILENAME_PREVIEW_VARS.date(conv)
       
-      expect(endDate).toBe(date)
+      expect(endDate).toBe(localDate(Date.now()))
+      expect(endDate).not.toBe(date)
     })
 
     it('should generate conv_date preview from createdAt', () => {
@@ -255,6 +269,22 @@ describe('Filename Generation', () => {
       const filename = generateFilename('{end_date}-{title}', conv)
       
       expect(filename).toMatch(/^\d{4}-\d{2}-\d{2}-My-Test-Conversation$/)
+    })
+
+    it('uses the first message timestamp when it predates createdAt', () => {
+      const firstMessageAt = new Date(2024, 4, 10, 9, 15, 20).getTime()
+      const createdAt = new Date(2024, 4, 12, 12, 0, 0).getTime()
+      const conv = createConversation({
+        createdAt,
+        messages: [
+          { id: 'later', role: 'assistant', content: 'Later', timestamp: createdAt },
+          { id: 'first', role: 'user', content: 'First', timestamp: firstMessageAt },
+        ],
+      })
+
+      expect(generateFilename('{date}-{datetime}-{conv_date}-{conv_datetime}', conv)).toBe(
+        `${localDate(firstMessageAt)}-${localDateTime(firstMessageAt)}-${localDate(firstMessageAt)}-${localDateTime(firstMessageAt)}`
+      )
     })
 
     it('should fallback conv_date to current date when no createdAt', () => {

@@ -9,7 +9,7 @@ import type { Conversation } from './types'
  * Removes or replaces characters not allowed in filenames
  * Preserves Unicode characters (Chinese, Japanese, Korean, Arabic, etc.)
  */
-function sanitizeFilename(text: string): string {
+export function sanitizeFilename(text: string): string {
   return text
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')  // Remove filesystem-unsafe chars only
     .replace(/\s+/g, '-')                      // Replace spaces with hyphens
@@ -19,24 +19,27 @@ function sanitizeFilename(text: string): string {
 }
 
 /**
- * Get a date string as YYYY-MM-DD from a Date or timestamp
+ * Get a browser-local date string as YYYY-MM-DD.
+ *
+ * Export filenames are user-facing, so they use the browser's local calendar
+ * day rather than UTC (which can otherwise move an evening conversation to
+ * the following day for users east of Greenwich).
  */
 function formatDate(date: Date): string {
-  return date.toISOString().split('T')[0]
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 /**
- * Get a date and time string as YYYY-MM-DDTHHmmss from a Date or timestamp
- * Uses 'T' separator which gets lowercased in filenames to 't'
+ * Get a browser-local date and time string as YYYY-MM-DDTHHmmss.
  */
 function formatDateTime(date: Date): string {
-  const iso = date.toISOString()
-  // Extract YYYY-MM-DDTHHmmss from ISO string, dropping milliseconds and timezone
-  const match = iso.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/)
-  if (match) {
-    return match[1] + 'T' + match[2].replace(/:/g, '')
-  }
-  return iso.replace(/[:.]/g, '').split('T').join('T').substring(0, 19)
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${formatDate(date)}T${hours}${minutes}${seconds}`
 }
 
 /**
@@ -47,32 +50,32 @@ function getDateStr(): string {
 }
 
 /**
- * Get the current date and time as YYYY-MM-DDTHHmmss
+ * Return the earliest trustworthy timestamp exposed by the provider. A list
+ * endpoint can give us `createdAt`, while a full page/API response can give us
+ * timestamps on individual messages; choosing the earliest means `{date}`
+ * names the conversation by when it began, not when it happened to export.
  */
-function getDateTimeStr(): string {
-  return formatDateTime(new Date())
+function getConversationStartDate(conversation: Conversation): Date {
+  const candidates = [
+    conversation.createdAt,
+    ...conversation.messages.map(message => message.timestamp),
+  ].filter((timestamp): timestamp is number =>
+    typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp >= 0
+  )
+
+  return new Date(candidates.length > 0 ? Math.min(...candidates) : Date.now())
 }
 
-/**
- * Get a conversation date string from createdAt timestamp
- * Falls back to current date if createdAt is not available
- */
 function getConvDateStr(conversation: Conversation): string {
-  if (conversation.createdAt) {
-    return formatDate(new Date(conversation.createdAt))
-  }
-  return getDateStr()
+  return formatDate(getConversationStartDate(conversation))
 }
 
 /**
- * Get a conversation date and time string from createdAt timestamp
- * Falls back to current date/time if createdAt is not available
+ * Get the conversation's first known local date and time. Falls back to the
+ * export moment only when no provider timestamp is available at all.
  */
 function getConvDateTimeStr(conversation: Conversation): string {
-  if (conversation.createdAt) {
-    return formatDateTime(new Date(conversation.createdAt))
-  }
-  return getDateTimeStr()
+  return formatDateTime(getConversationStartDate(conversation))
 }
 
 /**
@@ -87,12 +90,17 @@ export function generateFilename(
   conversation: Conversation,
   index?: number
 ): string {
+  const conversationDate = getConvDateStr(conversation)
+  const conversationDateTime = getConvDateTimeStr(conversation)
   const vars: Record<string, string> = {
-    date: getDateStr(),
-    datetime: getDateTimeStr(),
+    // `{date}` and `{datetime}` are the default filename tokens. They must
+    // describe the conversation's first event, not today's export date.
+    date: conversationDate,
+    datetime: conversationDateTime,
     end_date: getDateStr(),
-    conv_date: getConvDateStr(conversation),
-    conv_datetime: getConvDateTimeStr(conversation),
+    // Retain the older explicit names as compatible aliases.
+    conv_date: conversationDate,
+    conv_datetime: conversationDateTime,
     title: sanitizeFilename(
       conversation.title && conversation.title !== 'Untitled Conversation'
         ? conversation.title
@@ -131,8 +139,8 @@ export function getDefaultPattern(): string {
  * Preview variables for the filename editor
  */
 export const FILENAME_PREVIEW_VARS: Record<string, (conv: Conversation) => string> = {
-  date: () => getDateStr(),
-  datetime: () => getDateTimeStr(),
+  date: (conv) => getConvDateStr(conv),
+  datetime: (conv) => getConvDateTimeStr(conv),
   end_date: () => getDateStr(),
   conv_date: (conv) => getConvDateStr(conv),
   conv_datetime: (conv) => getConvDateTimeStr(conv),

@@ -6,6 +6,8 @@ build/
 .plasmo/
 dist/
 /ai-chat-exporter/
+output/pdf/visual-regression/
+output/pdf/inline-media-regression/
 *.tsbuildinfo
 
 # Testing

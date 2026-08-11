@@ -10,10 +10,11 @@ describe('bulk PDF performance contract', () => {
   })
 
   it('prefetches only the next conversation while rendering stays sequential', () => {
-    expect(source).toContain('let nextConversation = startConversationFetch(selectedConversations[0])')
-    expect(source).toContain('nextConversation = startConversationFetch(selectedConversations[i + 1])')
+    expect(source).toContain('let currentConversationFetch = startConversationFetch(eligibleConversations[0])')
+    expect(source).toContain('nextConversationFetch = i + 1 < eligibleConversations.length')
+    expect(source).toContain('? startConversationFetch(eligibleConversations[i + 1])')
     expect(source).toContain('const result = await currentConversation')
-    expect(source).not.toContain('Promise.all(selectedConversations')
+    expect(source).not.toContain('Promise.all(eligibleConversations')
   })
 
   it('settles prefetched failures immediately instead of leaving an unhandled rejection', () => {

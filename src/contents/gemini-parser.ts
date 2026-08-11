@@ -8,22 +8,145 @@
  *   window.postMessage for the content script to store in chrome.storage.local.
  * - Fallback: __WIZ_global_data, script tags, hidden inputs, meta tags.
  */
-import type { Conversation, ChatMessage, PlatformParser, ConversationListItem } from '../lib/types'
+import type { Conversation, ChatMessage, ConversationListItem } from '../lib/types'
+import type { PlasmoCSConfig } from 'plasmo'
 import {
   generateId,
   extractTextContent,
-  extractTextWithBreaks,
+  extractTextWithMedia,
   extractCodeBlocks,
   extractImages,
   cleanText
 } from '../lib/dom-utils'
-import { preferMoreCompleteConversation, shouldUseApiFallback } from '../lib/parser-fallback'
+import { mergeRenderedImageAttachments, preferMoreCompleteConversation, shouldUseApiFallback } from '../lib/parser-fallback'
+import { registerParserMessageHandler, runParserMain } from '../lib/parser-runtime'
+import { isProviderRateLimitError, isRateLimitedResponse, ProviderRateLimitError } from '../lib/provider-rate-limit'
 
 export interface GeminiCredential {
   at?: string
   sid?: string
   accountSlot?: string
   lastUsed?: number
+}
+
+const GEMINI_CREDENTIAL_TTL_MS = 24 * 60 * 60 * 1000
+const GEMINI_CREDENTIAL_MAX_ENTRIES = 8
+const GEMINI_AUTH_TOKEN_MAX_LENGTH = 4096
+const GEMINI_SESSION_ID_MAX_LENGTH = 64
+const GEMINI_ACCOUNT_SLOT_MAX_LENGTH = 16
+// The live Gemini app currently asks for both conversation-list streams. Keep
+// the same page size and envelope shape so bulk history does not depend on the
+// virtualized sidebar being scrolled into view.
+const GEMINI_LIST_PAGE_SIZE = 25
+const GEMINI_LIST_MAX_PAGES_PER_STREAM = 200
+const GEMINI_LIST_MODES = [1, 0] as const
+const GEMINI_DETAIL_TURN_LIMIT = 1000
+
+/** Result metadata lets the popup distinguish the account API from its
+ * intentionally incomplete, virtualized-sidebar fallback. */
+export interface GeminiConversationListResult {
+  conversations: ConversationListItem[]
+  source: 'api' | 'sidebar'
+  complete: boolean
+}
+
+interface GeminiConversationListStreamResult {
+  conversations: ConversationListItem[]
+  complete: boolean
+  receivedPayload: boolean
+}
+
+/** Validate page-world credentials before they enter extension storage. */
+export function validateGeminiCredentialPayload(payload: unknown, now = Date.now()): GeminiCredential | null {
+  if (!payload || typeof payload !== 'object') return null
+  const candidate = payload as GeminiCredential
+  const at = candidate.at
+  const sid = candidate.sid
+  const accountSlot = candidate.accountSlot
+  const lastUsed = candidate.lastUsed
+
+  if (at !== undefined && (typeof at !== 'string' || !at || at.length > GEMINI_AUTH_TOKEN_MAX_LENGTH)) return null
+  if (sid !== undefined && (typeof sid !== 'string' || !/^[+-]?\d+$/.test(sid) || sid.length > GEMINI_SESSION_ID_MAX_LENGTH)) return null
+  if (!at && !sid) return null
+  if (typeof accountSlot !== 'string' || accountSlot.length > GEMINI_ACCOUNT_SLOT_MAX_LENGTH || !/^(?:default|u\d+)$/.test(accountSlot)) return null
+  if (typeof lastUsed !== 'number' || !Number.isFinite(lastUsed) || lastUsed < now - GEMINI_CREDENTIAL_TTL_MS || lastUsed > now + 5 * 60 * 1000) return null
+
+  return { at, sid, accountSlot, lastUsed }
+}
+
+/** Keep only recent, valid credentials and cap retained account sessions. */
+export function pruneGeminiCredentialMap(
+  credentialsMap: Record<string, GeminiCredential> | undefined,
+  now = Date.now()
+): Record<string, GeminiCredential> {
+  const validEntries = Object.entries(credentialsMap || {})
+    .map(([key, credential]) => {
+      // Older extension versions stored mapped credentials before lastUsed was
+      // available. Retain them once, timestamping their migration so TTL
+      // enforcement starts immediately rather than breaking active sessions.
+      const normalized = credential.lastUsed === undefined ? { ...credential, lastUsed: now } : credential
+      return [key, validateGeminiCredentialPayload(normalized, now)] as const
+    })
+    .filter((entry): entry is readonly [string, GeminiCredential] => entry[1] !== null)
+    .sort(([, left], [, right]) => (right.lastUsed || 0) - (left.lastUsed || 0))
+    .slice(0, GEMINI_CREDENTIAL_MAX_ENTRIES)
+
+  return Object.fromEntries(validEntries)
+}
+
+/**
+ * The legacy singleton has no account-slot binding, but it is still used as a
+ * fallback while an older page has not produced a hooked credential yet. Give
+ * it the same bounded lifetime as the account map and persist the migration so
+ * an old entry cannot receive a fresh 24-hour lease on every read.
+ */
+export function normalizeGeminiSingletonCredential(
+  value: unknown,
+  now = Date.now()
+): GeminiCredential | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const candidate = value as GeminiCredential
+  const at = candidate.at
+  const sid = candidate.sid
+  const lastUsed = candidate.lastUsed
+
+  if (at !== undefined && (typeof at !== 'string' || !at || at.length > GEMINI_AUTH_TOKEN_MAX_LENGTH)) return undefined
+  if (sid !== undefined && (typeof sid !== 'string' || !/^[+-]?\d+$/.test(sid) || sid.length > GEMINI_SESSION_ID_MAX_LENGTH)) return undefined
+  if (!at && !sid) return undefined
+  if (lastUsed !== undefined && (
+    typeof lastUsed !== 'number' ||
+    !Number.isFinite(lastUsed) ||
+    lastUsed < now - GEMINI_CREDENTIAL_TTL_MS ||
+    lastUsed > now + 5 * 60 * 1000
+  )) return undefined
+
+  return { at, sid, lastUsed: lastUsed ?? now }
+}
+
+function geminiTimestamp(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 10_000_000_000 ? value * 1000 : value
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) return numeric < 10_000_000_000 ? numeric * 1000 : numeric
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? undefined : parsed
+  }
+  return undefined
+}
+
+/** Gemini's list RPC exposes its row timestamp as [seconds, nanoseconds].
+ * It is deliberately parsed as provider activity metadata, not renamed to a
+ * conversation creation date that the list endpoint does not document. */
+function geminiListTimestamp(value: unknown): number | undefined {
+  if (!Array.isArray(value)) return geminiTimestamp(value)
+  const seconds = geminiTimestamp(value[0])
+  if (seconds === undefined) return undefined
+  const nanos = typeof value[1] === 'number' && Number.isFinite(value[1])
+    ? Math.max(0, Math.floor(value[1] / 1_000_000))
+    : 0
+  return seconds + nanos
 }
 
 /** Select the newest credential for the active account without cross-account
@@ -51,11 +174,10 @@ const HOOK_SCRIPT_CODE = `(() => {
 
   const originalFetch = window.fetch
   window.fetch = async function (...args) {
-    const response = await originalFetch.apply(this, args)
     try {
       processRequest(args[0], args[1]?.body?.toString?.())
     } catch (e) {}
-    return response
+    return originalFetch.apply(this, args)
   }
 
   const originalOpen = XMLHttpRequest.prototype.open
@@ -96,7 +218,7 @@ const HOOK_SCRIPT_CODE = `(() => {
 
         window.postMessage(
           { type: "GEMINI_CREDENTIALS", payload: { at: result.at, sid: result.sid, accountSlot: result.accountSlot, lastUsed: result.lastUsed } },
-          "*"
+          window.location.origin
         )
       }
     } catch (e) {}
@@ -111,20 +233,34 @@ function injectHookScript() {
   // Avoid injecting twice
   if (document.querySelector('script[data-gemini-hook="true"]')) return
 
+  const root = document.documentElement
+  // document_start normally has an <html> element already, but keep the
+  // credential bridge safe on the rare earliest lifecycle boundary.
+  if (!root) {
+    document.addEventListener('DOMContentLoaded', injectHookScript, { once: true })
+    return
+  }
+
   const script = document.createElement('script')
   script.textContent = HOOK_SCRIPT_CODE
   script.setAttribute('data-gemini-hook', 'true')
   script.type = 'text/javascript'
   script.async = false
-  document.documentElement.appendChild(script)
+  root.appendChild(script)
   script.remove()
 }
 
 /**
  * Gemini parser implementation
  */
-export class GeminiParser implements PlatformParser {
+export class GeminiParser {
   platform = 'gemini' as const
+  private authenticationRequired = false
+
+  /** Safe aggregate signal for the scheduled-export status surface. */
+  isAuthenticationRequired(): boolean {
+    return this.authenticationRequired
+  }
 
   /**
    * Check if current page is a Gemini conversation
@@ -230,27 +366,35 @@ export class GeminiParser implements PlatformParser {
   private async getAuthToken(): Promise<string | null> {
     // 1. Check hooked credentials in storage (most reliable)
     try {
-      const stored = await chrome.storage.local.get(['gemini_credentials', 'gemini_credentials_map'])
-      const credentials = stored.gemini_credentials
-      const credentialsMap: Record<string, GeminiCredential> = stored.gemini_credentials_map || {}
+      const { credentials, credentialsMap } = await this.getStoredCredentials()
 
       // Try to find credentials for current account slot
       const accountSlot = this.getAccountSlot()
       const slotCreds = selectGeminiCredential(credentialsMap, accountSlot, 'at')
 
-      if (slotCreds?.at) return slotCreds.at
-      if (Object.values(credentialsMap).some(c => c.accountSlot && c.accountSlot !== accountSlot)) return null
+      if (slotCreds?.at) {
+        this.authenticationRequired = false
+        return slotCreds.at
+      }
+      if (Object.values(credentialsMap).some(c => c.accountSlot && c.accountSlot !== accountSlot)) {
+        this.authenticationRequired = true
+        return null
+      }
       // The legacy singleton is only a fallback for pages where no mapped
       // account credential exists. A matching account map always wins.
-      if (credentials?.at) return credentials.at
+      if (credentials?.at) {
+        this.authenticationRequired = false
+        return credentials.at
+      }
     } catch (e) {
       // chrome.storage not available in tests
     }
 
     // 2. Fallback: try __WIZ_global_data
     try {
-      const wizData = (window as any).__WIZ_global_data
+      const wizData = (window as any).__WIZ_global_data || (window as any).WIZ_global_data
       if (wizData && wizData.SNlM0e) {
+        this.authenticationRequired = false
         return wizData.SNlM0e
       }
     } catch {
@@ -263,6 +407,7 @@ export class GeminiParser implements PlatformParser {
       for (const cookie of cookies) {
         const [name, value] = cookie.trim().split('=')
         if (name === 'SNlM0e' && value) {
+          this.authenticationRequired = false
           return value
         }
       }
@@ -277,22 +422,26 @@ export class GeminiParser implements PlatformParser {
       // Look for SNlM0e pattern
       const match = text.match(/"SNlM0e"\s*:\s*"([^"]+)"/)
       if (match) {
+        this.authenticationRequired = false
         return match[1]
       }
     }
 
     // 5. Fallback: try to find a hidden input with the token
-    const input = document.querySelector('input[name="SNlM0e"]') as HTMLInputElement
-    if (input) {
+    const input = document.querySelector('input[name="at"], input[name="SNlM0e"]') as HTMLInputElement
+    if (input?.value) {
+      this.authenticationRequired = false
       return input.value
     }
 
     // 6. Fallback: try meta tag
-    const meta = document.querySelector('meta[name="SNlM0e"]')
-    if (meta) {
+    const meta = document.querySelector('meta[name="at"], meta[name="SNlM0e"]')
+    if (meta?.getAttribute('content')) {
+      this.authenticationRequired = false
       return meta.getAttribute('content')
     }
 
+    this.authenticationRequired = true
     return null
   }
 
@@ -301,17 +450,41 @@ export class GeminiParser implements PlatformParser {
    */
   private async getSessionId(): Promise<string> {
     try {
-      const stored = await chrome.storage.local.get(['gemini_credentials', 'gemini_credentials_map'])
-      const credentialsMap: Record<string, GeminiCredential> = stored.gemini_credentials_map || {}
+      const { credentials, credentialsMap } = await this.getStoredCredentials()
       const accountSlot = this.getAccountSlot()
       const slotCreds = selectGeminiCredential(credentialsMap, accountSlot, 'sid')
 
       if (slotCreds?.sid) return slotCreds.sid
       if (Object.values(credentialsMap).some(c => c.accountSlot && c.accountSlot !== accountSlot)) return ''
-      return stored.gemini_credentials?.sid || ''
+      return credentials?.sid || ''
     } catch {
       return ''
     }
+  }
+
+  /** Read bridge credentials while removing expired or malformed map entries. */
+  private async getStoredCredentials(): Promise<{
+    credentials?: GeminiCredential
+    credentialsMap: Record<string, GeminiCredential>
+  }> {
+    const stored = await chrome.storage.local.get(['gemini_credentials', 'gemini_credentials_map'])
+    const storedMap: Record<string, GeminiCredential> = stored.gemini_credentials_map || {}
+    const now = Date.now()
+    const credentialsMap = pruneGeminiCredentialMap(storedMap, now)
+    const credentials = normalizeGeminiSingletonCredential(stored.gemini_credentials, now)
+    const mapChanged = JSON.stringify(credentialsMap) !== JSON.stringify(storedMap)
+    const singletonChanged = JSON.stringify(credentials) !== JSON.stringify(stored.gemini_credentials)
+
+    if (mapChanged || (singletonChanged && credentials)) {
+      await chrome.storage.local.set({
+        ...(mapChanged ? { gemini_credentials_map: credentialsMap } : {}),
+        ...(singletonChanged && credentials ? { gemini_credentials: credentials } : {})
+      })
+    }
+    if (singletonChanged && !credentials && stored.gemini_credentials !== undefined) {
+      await chrome.storage.local.remove('gemini_credentials')
+    }
+    return { credentials, credentialsMap }
   }
 
   /**
@@ -325,7 +498,6 @@ export class GeminiParser implements PlatformParser {
     const params = new URLSearchParams({
       rpcids,
       'source-path': sourcePath,
-      bl: 'boq_assistant-bard-web-server_20260107.06_p0',
       'f.sid': sessionId,
       _reqid: String(Math.floor(Math.random() * 100000)),
       rt: 'c'
@@ -341,6 +513,16 @@ export class GeminiParser implements PlatformParser {
     body.set('f.req', requestPayload)
     body.set('at', authToken)
     return body.toString()
+  }
+
+  /**
+   * Gemini's current batchexecute page requests use a three-level batch
+   * envelope: [[[rpcId, jsonArgs, null, 'generic']]]. The older two-level
+   * form can return HTTP 200 with an empty payload, which then made the popup
+   * silently fall back to only the virtualized sidebar rows.
+   */
+  private buildGeminiRpcRequest(rpcId: string, args: unknown): string {
+    return JSON.stringify([[[rpcId, JSON.stringify(args), null, 'generic']]])
   }
 
   /**
@@ -361,93 +543,155 @@ export class GeminiParser implements PlatformParser {
       credentials: 'include',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        'X-Same-Domain': '1',
       },
       body
     })
 
+    if (isRateLimitedResponse(response)) {
+      throw new ProviderRateLimitError()
+    }
+
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        this.authenticationRequired = true
+        await this.clearStoredCredentialsForCurrentAccount()
+      }
       console.error(`[Gemini Parser] API error: ${response.status}`)
       return null
     }
 
+    this.authenticationRequired = false
+
     return response.text()
   }
 
-  /**
-   * Fetch ALL conversations via Gemini's batchexecute API.
-   * Uses the correct RPC ID 'MaZiqc' and proper request format matching the original extension.
-   */
-  async fetchAllConversations(): Promise<ConversationListItem[]> {
-    const conversations: ConversationListItem[] = []
-
+  /** Remove only credentials that are demonstrably invalid for this account. */
+  private async clearStoredCredentialsForCurrentAccount(): Promise<void> {
     try {
-      // Get the auth token (async — reads from chrome.storage.local first)
+      const accountSlot = this.getAccountSlot()
+      const stored = await chrome.storage.local.get(['gemini_credentials_map'])
+      const credentialsMap = pruneGeminiCredentialMap(stored.gemini_credentials_map)
+      for (const [key, credential] of Object.entries(credentialsMap)) {
+        if (credential.accountSlot === accountSlot) delete credentialsMap[key]
+      }
+      await chrome.storage.local.set({ gemini_credentials_map: credentialsMap })
+      await chrome.storage.local.remove('gemini_credentials')
+    } catch {
+      // Storage is optional for DOM parsing and must not mask the API failure.
+    }
+  }
+
+  /**
+   * Fetch Gemini history from both list streams. `MaZiqc` is not a sidebar
+   * scrape: the two streams mirror the live app's own requests and each stream
+   * follows its cursor serially. This keeps the list complete without asking a
+   * user to scroll through virtualized DOM rows.
+   */
+  async fetchAllConversationsWithStatus(): Promise<GeminiConversationListResult> {
+    try {
       const authToken = await this.getAuthToken()
       if (!authToken) {
         console.error('[Gemini Parser] Could not find auth token')
-        return this.getConversationList() // Fall back to DOM
+        return { conversations: this.getConversationList(), source: 'sidebar', complete: false }
       }
 
-      // Get session ID from stored hooked credentials
       const sessionId = await this.getSessionId()
+      const streams = await Promise.all(
+        GEMINI_LIST_MODES.map(mode => this.fetchGeminiConversationListStream(authToken, sessionId, mode))
+      )
+      const conversations = this.mergeGeminiConversationListItems(
+        streams.flatMap(stream => stream.conversations)
+      )
 
-      let nextPageToken: string = ''
-      let hasMore = true
-      let retries = 0
-      const maxRetries = 2
-      const seenPageTokens = new Set<string>()
+      // An empty, successfully parsed account list is a valid result. Only use
+      // the sidebar when neither RPC stream returned a parseable payload.
+      if (!streams.some(stream => stream.receivedPayload)) {
+        return { conversations: this.getConversationList(), source: 'sidebar', complete: false }
+      }
 
-      while (hasMore) {
-        try {
-          // Use the correct RPC ID 'MaZiqc' and request format
-          // Format: [[\"MaZiqc\", JSON.stringify([20, pageToken, [0,null,1]]), null, \"generic\"]]
-          const requestPayload = JSON.stringify([
-            ['MaZiqc', JSON.stringify([20, nextPageToken || null, [0, null, 1]]), null, 'generic']
-          ])
-
-          const text = await this.makeBatchExecuteCall(
-            'MaZiqc',
-            '/app',
-            requestPayload,
-            authToken,
-            sessionId
-          )
-
-          if (!text) {
-            if (retries < maxRetries) {
-              retries++
-              await new Promise(r => setTimeout(r, 1000))
-              continue
-            }
-            break
-          }
-
-          const payload = this.parseRpcPayload(text, 'MaZiqc')
-          const items = Array.isArray(payload) ? this.parseBatchResponse(payload) : []
-          if (items.length > 0) conversations.push(...items)
-
-          const returnedPageToken = typeof payload?.[1] === 'string' ? payload[1] : ''
-          if (items.length === 0 || !returnedPageToken || seenPageTokens.has(returnedPageToken)) {
-            hasMore = false
-          } else {
-            seenPageTokens.add(returnedPageToken)
-            nextPageToken = returnedPageToken
-          }
-        } catch (error) {
-          console.error('[Gemini Parser] Error in pagination:', error)
-          break
-        }
+      return {
+        conversations,
+        source: 'api',
+        complete: streams.every(stream => stream.complete)
       }
     } catch (error) {
-      console.error('[Gemini Parser] Error fetching conversations:', error)
+      if (isProviderRateLimitError(error)) throw error
+      console.error('[Gemini Parser] Error fetching account history:', error)
+      return { conversations: this.getConversationList(), source: 'sidebar', complete: false }
+    }
+  }
+
+  /** Fetch one Gemini history stream, following only its own continuation tokens. */
+  private async fetchGeminiConversationListStream(
+    authToken: string,
+    sessionId: string,
+    mode: (typeof GEMINI_LIST_MODES)[number]
+  ): Promise<GeminiConversationListStreamResult> {
+    const conversations: ConversationListItem[] = []
+    const seenPageTokens = new Set<string>()
+    let pageToken: string | null = null
+    let receivedPayload = false
+
+    for (let page = 0; page < GEMINI_LIST_MAX_PAGES_PER_STREAM; page++) {
+      let text: string | null = null
+      for (let attempt = 0; attempt <= 2; attempt++) {
+        text = await this.makeBatchExecuteCall(
+          'MaZiqc',
+          '/app',
+          this.buildGeminiRpcRequest('MaZiqc', [
+            GEMINI_LIST_PAGE_SIZE,
+            pageToken,
+            [mode, null, 1]
+          ]),
+          authToken,
+          sessionId
+        )
+        if (text) break
+        if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1_000))
+      }
+
+      if (!text) return { conversations, complete: false, receivedPayload }
+
+      const payload = this.parseRpcPayload(text, 'MaZiqc')
+      if (!Array.isArray(payload)) return { conversations, complete: false, receivedPayload }
+      receivedPayload = true
+      conversations.push(...this.parseBatchResponse(payload))
+
+      const nextPageToken = this.extractGeminiListPageToken(payload)
+      if (!nextPageToken) return { conversations, complete: true, receivedPayload }
+      if (seenPageTokens.has(nextPageToken)) {
+        return { conversations, complete: false, receivedPayload }
+      }
+
+      seenPageTokens.add(nextPageToken)
+      pageToken = nextPageToken
     }
 
-    // If API didn't return results, fall back to DOM
-    if (conversations.length === 0) {
-      return this.getConversationList()
-    }
+    return { conversations, complete: false, receivedPayload }
+  }
 
-    return Array.from(new Map(conversations.map(item => [item.id, item])).values())
+  /** Keep the known cursor positions explicit rather than recursively guessing strings. */
+  private extractGeminiListPageToken(payload: unknown): string | null {
+    if (!Array.isArray(payload)) return null
+    const nested = Array.isArray(payload[0]) ? payload[0] : []
+    const candidates = [payload[1], nested[1]]
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) return candidate
+    }
+    return null
+  }
+
+  /** Deduplicate the two streams without discarding a provider timestamp. */
+  private mergeGeminiConversationListItems(items: ConversationListItem[]): ConversationListItem[] {
+    const byId = new Map<string, ConversationListItem>()
+    for (const item of items) {
+      const existing = byId.get(item.id)
+      if (!existing || (!Number.isFinite(existing.updatedAt) && Number.isFinite(item.updatedAt))) {
+        byId.set(item.id, item)
+      }
+    }
+    return Array.from(byId.values())
   }
 
   /**
@@ -474,11 +718,13 @@ export class GeminiParser implements PlatformParser {
                 typeof maybeTitle === 'string'
               ) {
                 const normalizedId = maybeId.replace(/^c_/, '')
+                const updatedAt = geminiListTimestamp(item[5])
                 items.push({
                   id: normalizedId,
                   title: maybeTitle,
                   url: `https://gemini.google.com/app/${normalizedId}`,
-                  platform: 'gemini'
+                  platform: 'gemini',
+                  ...(updatedAt === undefined ? {} : { updatedAt })
                 })
               }
             }
@@ -521,8 +767,18 @@ export class GeminiParser implements PlatformParser {
       // strings from the response: it also contains citations, source pages,
       // internal reasoning and unrelated navigation data.
       const wireId = `c_${normalizedId}`
-      const requestPayload = JSON.stringify([
-        ['hNvQHb', JSON.stringify([wireId, 10, null, 1, [0], [4], null, 1]), null, 'generic']
+      // Fetch one complete conversation in one provider request. The list
+      // stream never opens individual conversations; this detail call is only
+      // made after the user has selected a conversation to export.
+      const requestPayload = this.buildGeminiRpcRequest('hNvQHb', [
+        wireId,
+        GEMINI_DETAIL_TURN_LIMIT,
+        null,
+        1,
+        [1],
+        [4],
+        null,
+        1
       ])
 
       const text = await this.makeBatchExecuteCall(
@@ -562,6 +818,7 @@ export class GeminiParser implements PlatformParser {
         platform: 'gemini'
       }
     } catch (error) {
+      if (isProviderRateLimitError(error)) throw error
       console.error('[Gemini Parser] Error fetching conversation detail:', error)
       return null
     }
@@ -715,9 +972,10 @@ export class GeminiParser implements PlatformParser {
    * Parse a message element
    */
   private parseMessageElement(element: Element, role: ChatMessage['role']): ChatMessage | null {
-    const contentElement = element.querySelector(
-      '[class*="content"], [class*="text"], .markdown'
-    ) || element
+    // Gemini places Search/Maps result cards beside the prose subtree. Parse
+    // the message root so a narrow `.content` child cannot drop those visible
+    // cards from the transcript.
+    const contentElement = element
 
     const content = this.extractMessageContent(contentElement)
 
@@ -731,7 +989,8 @@ export class GeminiParser implements PlatformParser {
     const attachments = imageData.map(img => ({
       type: 'image' as const,
       url: img.url,
-      name: img.alt
+      name: img.alt,
+      uploaded: role === 'user'
     }))
 
     const messageId = element.getAttribute('data-message-id') ||
@@ -743,7 +1002,12 @@ export class GeminiParser implements PlatformParser {
       role,
       content,
       attachments: attachments.length > 0 ? attachments : undefined,
-      codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined
+      codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
+      timestamp: geminiTimestamp(
+        element.querySelector('time[datetime]')?.getAttribute('datetime')
+          || element.getAttribute('data-timestamp')
+          || element.getAttribute('data-created-at')
+      )
     }
   }
 
@@ -756,10 +1020,8 @@ export class GeminiParser implements PlatformParser {
     const removeSelectors = [
       'button',
       '[class*="toolbar"]',
-      '[class*="action"]',
       '[class*="copy"]',
       '[class*="share"]',
-      '[class*="menu"]',
       // Gemini injects static UI crumbs that are not message content
       '[class*="crumb"]',
       '[aria-label*="Gemini said"]',
@@ -772,10 +1034,12 @@ export class GeminiParser implements PlatformParser {
       clone.querySelectorAll(selector).forEach(el => el.remove())
     })
 
+    this.injectPlaceCardLabels(clone)
+
     // Read the cloned subtree once while adding line breaks for block nodes.
-    // Iterating every nested div/span repeats parent text again for each child,
-    // which previously multiplied Gemini answers inside the PDF.
-    let content = extractTextWithBreaks(clone)
+    // Image nodes become Markdown at their DOM position, so a place photo is
+    // exported next to its location details instead of at the final page.
+    let content = extractTextWithMedia(clone)
 
     // Drop standalone UI crumb lines Gemini renders inside the message body
     // (e.g. "Gemini said", "New notebook", "Show research", "Show thinking").
@@ -793,6 +1057,33 @@ export class GeminiParser implements PlatformParser {
       .join('\n')
 
     return cleanText(content)
+  }
+
+  /**
+   * Some Gemini Maps cards expose their name/rating only as an accessible link
+   * label. Keep it in the transcript before text extraction; ordinary cards
+   * whose visible text already contains the label are left untouched.
+   */
+  private injectPlaceCardLabels(root: Element): void {
+    const selectors = [
+      '[data-place-id]',
+      '[data-entity-id]',
+      'a[href*="/maps"]',
+      'a[href*="maps.google"]',
+      'a[href*="google.com/maps"]'
+    ]
+    const seen = new Set<Element>()
+    for (const selector of selectors) {
+      root.querySelectorAll(selector).forEach(card => {
+        if (seen.has(card)) return
+        seen.add(card)
+        const label = cleanText(card.getAttribute('aria-label') || '')
+        if (!label) return
+        const visible = cleanText(card.textContent || '')
+        if (visible.toLocaleLowerCase().includes(label.toLocaleLowerCase())) return
+        card.insertBefore(document.createTextNode(`\n\n${label}\n\n`), card.firstChild)
+      })
+    }
   }
 
   // getElementPosition removed — querySelectorAll already returns DOM order
@@ -836,7 +1127,7 @@ export class GeminiParser implements PlatformParser {
         const href = link.getAttribute('href')
         if (!href) return
 
-        const match = href.match(/\/app\/([a-f0-9]+)/)
+        const match = href.match(/\/app\/([a-zA-Z0-9_-]+)/)
         if (!match) return
 
         const id = match[1]
@@ -860,36 +1151,57 @@ export class GeminiParser implements PlatformParser {
   }
 }
 
+/** Resolve an open conversation through the same DOM/API recovery path as exports. */
+export async function resolveCurrentGeminiConversation(
+  currentParser: Pick<GeminiParser, 'parseCurrentConversation' | 'fetchConversationDetail'>,
+  conversationId: string,
+  requestedTitle?: string
+): Promise<Conversation | null> {
+  const domConversation = await currentParser.parseCurrentConversation()
+  if (!shouldUseApiFallback(domConversation)) return domConversation
+
+  try {
+    const apiConversation = await currentParser.fetchConversationDetail(conversationId, requestedTitle)
+    const preferred = preferMoreCompleteConversation(domConversation, apiConversation)
+    const renderedFallback = preferred === apiConversation ? domConversation : apiConversation
+    return mergeRenderedImageAttachments(preferred, renderedFallback) || null
+  } catch {
+    return domConversation
+  }
+}
+
 // Create parser instance
 const parser = new GeminiParser()
 
 // Export for content script
-export const config = {
-  matches: ['https://gemini.google.com/*']
+export const config: PlasmoCSConfig = {
+  matches: ['https://gemini.google.com/*'],
+  // Capture the page's very first batchexecute request. At document_idle that
+  // request is usually already over, leaving the bulk UI with no credential
+  // and forcing it into the virtualized sidebar fallback.
+  run_at: 'document_start'
 }
 
 // Listen for credentials from hook script (page world -> content script world)
 window.addEventListener('message', async (event) => {
-  if (event.source === window && event.data?.type === 'GEMINI_CREDENTIALS') {
-    const { at, sid, accountSlot, lastUsed } = event.data.payload
-    if (at || sid) {
+  if (event.source === window && event.origin === window.location.origin && event.data?.type === 'GEMINI_CREDENTIALS') {
+    const credential = validateGeminiCredentialPayload(event.data.payload)
+    if (credential) {
       try {
         // Get existing map to merge
         const existing = await chrome.storage.local.get(['gemini_credentials_map'])
-        const credentialsMap = existing.gemini_credentials_map || {}
+        const credentialsMap = pruneGeminiCredentialMap(existing.gemini_credentials_map)
 
         // Update the map with new credentials for this session
-        const key = sid || 'default'
+        const key = credential.sid || 'default'
         credentialsMap[key] = {
-          at,
-          sid,
-          accountSlot,
-          lastUsed: lastUsed || Date.now()
+          ...credential
         }
+        const prunedCredentialsMap = pruneGeminiCredentialMap(credentialsMap)
 
         await chrome.storage.local.set({
-          gemini_credentials: { at, sid },
-          gemini_credentials_map: credentialsMap
+          gemini_credentials: { at: credential.at, sid: credential.sid, lastUsed: credential.lastUsed },
+          gemini_credentials_map: prunedCredentialsMap
         })
       } catch (e) {
         // Storage may not be available in some contexts
@@ -901,91 +1213,78 @@ window.addEventListener('message', async (event) => {
 // Inject hook script into the page world for credential extraction
 injectHookScript()
 
-// Main function to run when script loads
-async function main() {
-  if (parser.isConversationPage()) {
-    const conversation = await parser.parseCurrentConversation()
-    if (conversation) {
-      chrome.storage.local.set({
-        [`conversation-${conversation.id}`]: { ...conversation, timestamp: Date.now() }
-      })
-    }
-  }
-}
-
-// Listen for messages from popup
+// Register the shared popup-message handler (see src/lib/parser-runtime.ts).
+// Gemini overrides the branches whose flow differs from the standard
+// parse/API-merge pipeline: credential-resolved current-conversation fetches
+// and the status-carrying conversation list.
 if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'PARSE_CONVERSATION') {
-    parser.parseCurrentConversation().then(conversation => {
-      const url = window.location.href
-      const match = url.match(/\/app\/([a-zA-Z0-9_-]+)/)
-      // A hydrated DOM is authoritative, but a user-only/empty DOM is a
-      // recoverable loading state. Hydrate it through the typed detail RPC
-      // before allowing an export path to treat it as complete.
-      if (match && shouldUseApiFallback(conversation)) {
-        parser.fetchConversationDetail(match[1]).then(apiConv => {
-          sendResponse({ data: preferMoreCompleteConversation(conversation, apiConv) })
-        }).catch(() => sendResponse({ data: conversation }))
-        return
-      }
-      sendResponse({ data: conversation })
-    }).catch(error => {
-      sendResponse({ error: error.message })
-    })
-    return true
-  }
+  registerParserMessageHandler({
+    platform: 'gemini',
+    parser,
+    handleParseConversation: (_message, sendResponse) => {
+      const conversationId = window.location.pathname.match(/\/app\/([a-zA-Z0-9_-]+)/)?.[1]
+      const conversationPromise = conversationId
+        ? resolveCurrentGeminiConversation(parser, conversationId)
+        : parser.parseCurrentConversation()
+      conversationPromise.then(conversation => {
+        sendResponse({ data: conversation })
+      }).catch(error => {
+        sendResponse({ error: error.message })
+      })
+      return true
+    },
+    handleFetchAllConversations: (_message, sendResponse) => {
+      parser.fetchAllConversationsWithStatus().then(result => {
+        sendResponse({
+          data: result.conversations,
+          meta: {
+            source: result.source,
+            complete: result.complete,
+            authRequired: parser.isAuthenticationRequired(),
+            // Gemini's list timestamp is activity metadata; export detail still
+            // supplies the earliest message timestamp for filename creation.
+            dateField: 'last_activity'
+          }
+        })
+      }).catch(error => {
+        if (isProviderRateLimitError(error)) {
+          sendResponse({ error: error.message, meta: { authRequired: parser.isAuthenticationRequired() } })
+          return
+        }
+        // If a future Gemini API change throws before the parser can return its
+        // structured status, preserve the fallback but label it as incomplete.
+        try {
+          const fallbackList = parser.getConversationList()
+          sendResponse({
+            data: fallbackList,
+            meta: {
+              source: 'sidebar',
+              complete: false,
+              authRequired: parser.isAuthenticationRequired(),
+            },
+          })
+        } catch {
+          sendResponse({ error: (error as Error).message, meta: { authRequired: parser.isAuthenticationRequired() } })
+        }
+      })
+      return true
+    },
+    handleFetchConversationDetail: (message, sendResponse) => {
+      const requestedId = String(message.data?.id || '').replace(/^c_/, '')
+      const currentId = window.location.pathname.match(/\/app\/([a-zA-Z0-9_-]+)/)?.[1]
+      const detailPromise = requestedId && requestedId === currentId
+        ? resolveCurrentGeminiConversation(parser, requestedId, message.data?.title)
+        : parser.fetchConversationDetail(requestedId, message.data?.title)
 
-  if (message.type === 'DETECT_PLATFORM') {
-    sendResponse({
-      data: {
-        platform: 'gemini',
-        isConversationPage: parser.isConversationPage(),
-        title: parser.getConversationTitle()
-      }
-    })
-  }
-
-  if (message.type === 'FETCH_CONVERSATION_LIST') {
-    try {
-      const list = parser.getConversationList()
-      sendResponse({ data: list })
-    } catch (error) {
-      sendResponse({ error: (error as Error).message })
+      detailPromise.then(conversation => {
+        sendResponse({ data: conversation })
+      }).catch(error => {
+        sendResponse({ error: error.message })
+      })
+      return true
     }
-  }
-
-  if (message.type === 'FETCH_ALL_CONVERSATIONS') {
-    parser.fetchAllConversations().then(list => {
-      sendResponse({ data: list })
-    }).catch(error => {
-      // Fall back to DOM-based list
-      try {
-        const fallbackList = parser.getConversationList()
-        sendResponse({ data: fallbackList })
-      } catch (e) {
-        sendResponse({ error: (error as Error).message })
-      }
-    })
-    return true
-  }
-
-  if (message.type === 'FETCH_CONVERSATION_DETAIL') {
-    const requestedId = String(message.data?.id || '').replace(/^c_/, '')
-    const currentId = window.location.pathname.match(/\/app\/([a-zA-Z0-9_-]+)/)?.[1]
-    const detailPromise = requestedId && requestedId === currentId
-      ? parser.parseCurrentConversation()
-      : parser.fetchConversationDetail(requestedId, message.data?.title)
-
-    detailPromise.then(conversation => {
-      sendResponse({ data: conversation })
-    }).catch(error => {
-      sendResponse({ error: error.message })
-    })
-    return true
-  }
-})
+  })
 }
 
 // Run on page load
-main()
+runParserMain(parser)

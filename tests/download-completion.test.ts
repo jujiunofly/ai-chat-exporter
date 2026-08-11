@@ -41,4 +41,53 @@ describe('download completion tracking', () => {
     const { api } = makeDownloads('complete')
     await expect(downloadAndWait({ url: 'data:text/plain,test', filename: 'test.txt', saveAs: false }, 1000, api)).resolves.toBe(42)
   })
+
+  it('propagates a request rejection before completion tracking begins', async () => {
+    const { api } = makeDownloads()
+    api.download = vi.fn(async () => { throw new Error('Invalid URL') })
+
+    await expect(downloadAndWait({ url: 'data:text/plain,test', filename: 'test.txt', saveAs: false }, 1000, api))
+      .rejects.toThrow('Invalid URL')
+    expect(api.onChanged.addListener).not.toHaveBeenCalled()
+  })
+
+  it('cancels an in-progress browser download when its export queue is stopped', async () => {
+    const { api } = makeDownloads()
+    api.cancel = vi.fn(async () => undefined)
+    const controller = new AbortController()
+
+    const promise = downloadAndWait(
+      { url: 'data:text/plain,test', filename: 'test.txt', saveAs: false },
+      1000,
+      api,
+      { signal: controller.signal }
+    )
+    await Promise.resolve()
+    controller.abort()
+
+    await expect(promise).rejects.toThrow('Export cancelled')
+    expect(api.cancel).toHaveBeenCalledWith(42)
+    expect(api.onChanged.removeListener).toHaveBeenCalled()
+  })
+
+  it('waits for async run bookkeeping before listening for completion', async () => {
+    const { api, emit } = makeDownloads()
+    let releaseStarted!: () => void
+    const started = new Promise<void>(resolve => { releaseStarted = resolve })
+
+    const promise = downloadAndWait(
+      { url: 'data:text/plain,test', filename: 'test.txt', saveAs: false },
+      1000,
+      api,
+      { onStarted: async () => started }
+    )
+    await Promise.resolve()
+    expect(api.onChanged.addListener).not.toHaveBeenCalled()
+
+    releaseStarted()
+    await vi.waitFor(() => expect(api.onChanged.addListener).toHaveBeenCalled(), { timeout: 100 })
+
+    emit({ id: 42, state: { current: 'complete' } } as chrome.downloads.DownloadDelta)
+    await expect(promise).resolves.toBe(42)
+  })
 })

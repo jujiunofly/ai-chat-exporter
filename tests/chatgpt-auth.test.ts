@@ -1,289 +1,87 @@
-/**
- * ChatGPT API Authentication Tests
- * Tests for access token fetching, caching, and 401 retry logic
- */
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+type ChatGPTParserConstructor = typeof import('../src/contents/chatgpt-parser').ChatGPTParser
 
-// Mock chrome.storage
-const mockStorage: Record<string, string> = {}
-;(globalThis as any).chrome = {
-  storage: {
-    sync: {
-      get: vi.fn(async (keys: string[]) => {
-        const result: Record<string, string> = {}
-        for (const key of keys) {
-          if (mockStorage[key]) result[key] = mockStorage[key]
-        }
-        return result
-      }),
-      set: vi.fn(async (items: Record<string, string>) => {
-        Object.assign(mockStorage, items)
-      }),
-      remove: vi.fn(async (keys: string | string[]) => {
-        const keyList = Array.isArray(keys) ? keys : [keys]
-        for (const key of keyList) {
-          delete mockStorage[key]
-        }
-      }),
-    },
-  },
+const storageLocal = {
+  get: vi.fn(async () => ({ chatGPTAccessToken: 'legacy-token-must-not-be-read' })),
+  set: vi.fn(async () => {}),
+  remove: vi.fn(async () => {})
 }
 
-// Mock fetch
-const mockFetch = vi.fn()
-;(globalThis as any).fetch = mockFetch
+let ChatGPTParser: ChatGPTParserConstructor
 
-// Import the ChatGPT parser class (we'll test its behavior indirectly
-// by testing the auth token flow pattern)
-import { describe as d, it as i, expect as e } from 'vitest'
+function response(status: number, data: unknown) {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => data
+  }
+}
 
-describe('ChatGPT API Authentication', () => {
+describe('ChatGPT API authentication', () => {
+  beforeAll(async () => {
+    vi.stubGlobal('chrome', {
+      storage: { local: storageLocal },
+      runtime: { onMessage: { addListener: vi.fn() } }
+    })
+    ;({ ChatGPTParser } = await import('../src/contents/chatgpt-parser'))
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
-    // Clear mock storage
-    for (const key of Object.keys(mockStorage)) {
-      delete mockStorage[key]
-    }
+    document.body.innerHTML = ''
   })
 
-  describe('getAccessToken', () => {
-    it('should return cached token when available', async () => {
-      // Pre-populate cache
-      mockStorage['chatGPTAccessToken'] = 'cached-token-123'
+  it('uses memory-only token caching and removes the legacy local key', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { accessToken: 'memory-token' }))
+      .mockResolvedValueOnce(response(200, { items: [] }))
+      .mockResolvedValueOnce(response(200, { items: [] }))
+    vi.stubGlobal('fetch', fetchMock)
 
-      const cached = await chrome.storage.sync.get(['chatGPTAccessToken'])
-      expect(cached.chatGPTAccessToken).toBe('cached-token-123')
-      // Should NOT call fetch for session endpoint
-      expect(mockFetch).not.toHaveBeenCalled()
-    })
+    const parser = new ChatGPTParser()
+    await parser.fetchAllConversations()
+    await parser.fetchAllConversations()
 
-    it('should fetch new token from session endpoint when cache is empty', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ accessToken: 'new-token-456' }),
-      })
-
-      const cached = await chrome.storage.sync.get(['chatGPTAccessToken'])
-      expect(cached.chatGPTAccessToken).toBeUndefined()
-
-      // Simulate the fetch flow
-      const response = await fetch('https://chatgpt.com/api/auth/session')
-      const data = await response.json()
-      await chrome.storage.sync.set({ chatGPTAccessToken: data.accessToken })
-
-      expect(data.accessToken).toBe('new-token-456')
-      expect(mockFetch).toHaveBeenCalledWith('https://chatgpt.com/api/auth/session')
-      expect(mockStorage['chatGPTAccessToken']).toBe('new-token-456')
-    })
-
-    it('should throw error when session endpoint returns 403', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 403,
-        json: async () => ({}),
-      })
-
-      const response = await fetch('https://chatgpt.com/api/auth/session')
-      expect(response.status).toBe(403)
-
-      // Simulate the error handling
-      if (response.status === 403) {
-        expect(() => { throw new Error('Forbidden') }).toThrow('Forbidden')
-      }
-    })
-
-    it('should throw error when response has no accessToken', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ user: 'some-user' }),
-      })
-
-      const response = await fetch('https://chatgpt.com/api/auth/session')
-      const data = await response.json()
-
-      expect(data.accessToken).toBeUndefined()
-      expect(() => { throw new Error('No access token in response') }).toThrow('No access token in response')
-    })
+    expect(storageLocal.remove).toHaveBeenCalledWith('chatGPTAccessToken')
+    expect(storageLocal.get).not.toHaveBeenCalled()
+    expect(storageLocal.set).not.toHaveBeenCalled()
+    expect(fetchMock.mock.calls.map(call => call[0])).toEqual([
+      'https://chatgpt.com/api/auth/session',
+      'https://chatgpt.com/backend-api/conversations?offset=0&limit=100&order=updated',
+      'https://chatgpt.com/backend-api/conversations?offset=0&limit=100&order=updated'
+    ])
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' })
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ credentials: 'include' })
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe('Bearer memory-token')
   })
 
-  describe('resetAccessToken', () => {
-    it('should remove cached token', async () => {
-      mockStorage['chatGPTAccessToken'] = 'old-token'
-      await chrome.storage.sync.remove('chatGPTAccessToken')
+  it('uses the legacy host for session, list, and generated conversation URLs', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { accessToken: 'legacy-origin-token' }))
+      .mockResolvedValueOnce(response(200, {
+        items: [{ id: 'conversation-1', title: 'Legacy host chat' }]
+      }))
+    vi.stubGlobal('fetch', fetchMock)
 
-      expect(mockStorage['chatGPTAccessToken']).toBeUndefined()
-    })
+    const conversations = await new ChatGPTParser('https://chat.openai.com').fetchAllConversations()
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://chat.openai.com/api/auth/session')
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      'https://chat.openai.com/backend-api/conversations?offset=0&limit=100&order=updated'
+    )
+    expect(conversations[0].url).toBe('https://chat.openai.com/c/conversation-1')
   })
 
-  describe('Authorization header in API calls', () => {
-    it('should include Bearer token in conversations API call', async () => {
-      const token = 'test-bearer-token'
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ items: [] }),
-      })
+  it('falls back to the canonical host for an unrecognized origin', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { accessToken: 'canonical-token' }))
+      .mockResolvedValueOnce(response(200, { items: [] }))
+    vi.stubGlobal('fetch', fetchMock)
 
-      await fetch(
-        'https://chatgpt.com/backend-api/conversations?offset=0&limit=100&order=updated',
-        {
-          credentials: 'include',
-          headers: {
-            'Accept': 'application/json',
-            'Authorization': 'Bearer ' + token,
-            'oai-language': 'en-US',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
-          },
-        }
-      )
+    await new ChatGPTParser('https://attacker.example').fetchAllConversations()
 
-      const [, options] = mockFetch.mock.calls[0]
-      expect(options.headers['Authorization']).toBe('Bearer test-bearer-token')
-      expect(options.headers['oai-language']).toBe('en-US')
-      expect(options.headers['sec-fetch-dest']).toBe('empty')
-      expect(options.headers['sec-fetch-mode']).toBe('cors')
-      expect(options.headers['sec-fetch-site']).toBe('same-origin')
-    })
-
-    it('should include Bearer token in conversation detail API call', async () => {
-      const token = 'test-detail-token'
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ id: 'conv-1', mapping: {} }),
-      })
-
-      await fetch(
-        'https://chatgpt.com/backend-api/conversation/conv-1',
-        {
-          credentials: 'include',
-          headers: {
-            'Accept': 'application/json',
-            'Authorization': 'Bearer ' + token,
-            'oai-language': 'en-US',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
-          },
-        }
-      )
-
-      const [, options] = mockFetch.mock.calls[0]
-      expect(options.headers['Authorization']).toBe('Bearer test-detail-token')
-    })
-  })
-
-  describe('401 retry flow', () => {
-    it('should reset token and retry on 401', async () => {
-      // Simulate: first call returns 401, second call succeeds
-      mockFetch
-        .mockResolvedValueOnce({ ok: false, status: 401 })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ items: [{ id: '1', title: 'Test' }] }),
-        })
-
-      // First call - 401
-      const response1 = await fetch('https://chatgpt.com/backend-api/conversations?offset=0&limit=100')
-      expect(response1.status).toBe(401)
-
-      // Reset token
-      await chrome.storage.sync.remove('chatGPTAccessToken')
-
-      // Get new token
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ accessToken: 'refreshed-token' }),
-      })
-      const tokenResponse = await fetch('https://chatgpt.com/api/auth/session')
-      const tokenData = await tokenResponse.json()
-      await chrome.storage.sync.set({ chatGPTAccessToken: tokenData.accessToken })
-
-      // Retry with new token
-      const response2 = await fetch(
-        'https://chatgpt.com/backend-api/conversations?offset=0&limit=100',
-        {
-          headers: {
-            'Authorization': 'Bearer ' + tokenData.accessToken,
-          },
-        }
-      )
-      expect(response2.ok).toBe(true)
-    })
-
-    it('should give up after max retries', async () => {
-      // All calls return 401
-      mockFetch.mockResolvedValue({ ok: false, status: 401 })
-
-      let retries = 0
-      const maxRetries = 1
-      let success = false
-
-      while (retries <= maxRetries) {
-        const response = await fetch('https://chatgpt.com/backend-api/conversations?offset=0&limit=100')
-        if (response.status === 401) {
-          if (retries < maxRetries) {
-            retries++
-            await chrome.storage.sync.remove('chatGPTAccessToken')
-            continue
-          }
-          break
-        }
-        success = true
-        break
-      }
-
-      expect(success).toBe(false)
-      expect(retries).toBe(maxRetries)
-    })
-  })
-
-  describe('Token caching behavior', () => {
-    it('should reuse cached token on subsequent calls', async () => {
-      // First fetch - no cache
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ accessToken: 'persistent-token' }),
-      })
-
-      let cached = await chrome.storage.sync.get(['chatGPTAccessToken'])
-      expect(cached.chatGPTAccessToken).toBeUndefined()
-
-      // Fetch and cache
-      const response = await fetch('https://chatgpt.com/api/auth/session')
-      const data = await response.json()
-      await chrome.storage.sync.set({ chatGPTAccessToken: data.accessToken })
-
-      // Second call - should use cache
-      cached = await chrome.storage.sync.get(['chatGPTAccessToken'])
-      expect(cached.chatGPTAccessToken).toBe('persistent-token')
-      // fetch should not be called again
-      expect(mockFetch).toHaveBeenCalledTimes(1)
-    })
-
-    it('should fetch new token after reset', async () => {
-      // Set initial token
-      mockStorage['chatGPTAccessToken'] = 'old-token'
-
-      // Reset
-      await chrome.storage.sync.remove('chatGPTAccessToken')
-
-      // Should be empty now
-      let cached = await chrome.storage.sync.get(['chatGPTAccessToken'])
-      expect(cached.chatGPTAccessToken).toBeUndefined()
-
-      // Fetch new token
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ accessToken: 'new-token' }),
-      })
-      const response = await fetch('https://chatgpt.com/api/auth/session')
-      const data = await response.json()
-      await chrome.storage.sync.set({ chatGPTAccessToken: data.accessToken })
-
-      cached = await chrome.storage.sync.get(['chatGPTAccessToken'])
-      expect(cached.chatGPTAccessToken).toBe('new-token')
-    })
+    expect(fetchMock.mock.calls[0][0]).toBe('https://chatgpt.com/api/auth/session')
+    expect(fetchMock.mock.calls[1][0]).toContain('https://chatgpt.com/backend-api/conversations')
   })
 })

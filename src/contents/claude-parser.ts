@@ -7,12 +7,13 @@
  * - No access token needed — the browser's cookie handles authentication
  * - Org ID is extracted from the page HTML or API responses
  */
-import type { Conversation, ChatMessage, PlatformParser, ConversationListItem, ConversationArtifact } from '../lib/types'
+import type { Conversation, ChatMessage, ConversationListItem, ConversationArtifact } from '../lib/types'
 import { generateId, extractTextContent, extractCodeBlocks, extractImages } from '../lib/dom-utils'
-import { preferMoreCompleteConversation } from '../lib/parser-fallback'
+import { registerParserMessageHandler, runParserMain } from '../lib/parser-runtime'
 import { getApiMessageRecords, normalizeApiMessageRole } from '../lib/api-message-normalizer'
 import { inferClaudeArtifactType } from '../lib/claude-artifact'
 import { claudeElementToMarkdown, extractClaudeMessageMarkdown, normalizeClaudeMarkdown } from '../lib/claude-rich-text'
+import { isProviderRateLimitError, isRateLimitedResponse, ProviderRateLimitError } from '../lib/provider-rate-limit'
 
 /** UUID regex for matching conversation IDs and org IDs */
 const UUID_REGEX = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
@@ -27,6 +28,19 @@ const LAST_ACTIVE_ORG_REGEX = /lastActiveOrg[^a-f0-9]{0,120}?([a-f0-9]{8}-[a-f0-
 const USER_ID_REGEX = /"_setUserId",\s*"([a-f0-9-]{36})"/i
 
 type ClaudeApiRecord = Record<string, any>
+
+function claudeTimestamp(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 10_000_000_000 ? value * 1000 : value
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) return numeric < 10_000_000_000 ? numeric * 1000 : numeric
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? undefined : parsed
+  }
+  return undefined
+}
 
 function firstString(...values: unknown[]): string | null {
   return values.find(value => typeof value === 'string' && value.trim()) as string | null || null
@@ -183,11 +197,17 @@ function extractOrgId(): string | null {
 /**
  * Claude parser implementation
  */
-export class ClaudeParser implements PlatformParser {
+export class ClaudeParser {
   platform = 'claude' as const
 
   /** Cached org ID to avoid re-extracting */
   private cachedOrgId: string | null = null
+  private authenticationRequired = false
+
+  /** Safe aggregate signal for the scheduled-export status surface. */
+  isAuthenticationRequired(): boolean {
+    return this.authenticationRequired
+  }
 
   /**
    * Check if current page is a Claude conversation
@@ -292,19 +312,27 @@ export class ClaudeParser implements PlatformParser {
       const response = await fetch('https://claude.ai/api/auth/session', {
         credentials: 'include'
       })
+      if (isRateLimitedResponse(response)) throw new ProviderRateLimitError()
+      if (response.status === 401 || response.status === 403) {
+        this.authenticationRequired = true
+        return null
+      }
       if (response.ok) {
         const data = await response.json()
         if (data.orgID) {
           this.cachedOrgId = data.orgID
+          this.authenticationRequired = false
           return data.orgID
         }
         // Some responses have organization details
         if (data.organization?.id) {
           this.cachedOrgId = data.organization.id
+          this.authenticationRequired = false
           return data.organization.id
         }
       }
-    } catch {
+    } catch (error) {
+      if (isProviderRateLimitError(error)) throw error
       // Session API not available
     }
 
@@ -341,7 +369,12 @@ export class ClaudeParser implements PlatformParser {
           }
         )
 
+        if (isRateLimitedResponse(response)) {
+          throw new ProviderRateLimitError()
+        }
+
         if (response.status === 401 || response.status === 403) {
+          this.authenticationRequired = true
           console.error(`[Claude Parser] Authentication error: ${response.status}`)
           break
         }
@@ -376,6 +409,7 @@ export class ClaudeParser implements PlatformParser {
           hasMore = false
         }
       } catch (error) {
+        if (isProviderRateLimitError(error)) throw error
         console.error('[Claude Parser] Error fetching conversations:', error)
         break
       }
@@ -410,6 +444,10 @@ export class ClaudeParser implements PlatformParser {
           }
         }
       )
+
+      if (isRateLimitedResponse(response)) {
+        throw new ProviderRateLimitError()
+      }
 
       if (response.status === 401 || response.status === 403) {
         console.error(`[Claude Parser] Auth error for conversation ${id}: ${response.status}`)
@@ -469,6 +507,10 @@ export class ClaudeParser implements PlatformParser {
                   : generateId(),
               role,
               content: normalizeClaudeMarkdown(content),
+              timestamp: claudeTimestamp(
+                msg.created_at ?? msg.createdAt ?? msg.create_time ??
+                msg.message?.created_at ?? msg.message?.createdAt
+              ),
             })
           }
       }
@@ -478,13 +520,22 @@ export class ClaudeParser implements PlatformParser {
         title: data.name || data.title || this.getConversationTitle(),
         url: `https://claude.ai/chat/${id}`,
         messages,
-        createdAt: data.created_at ? new Date(data.created_at).getTime() : undefined,
+        createdAt: claudeTimestamp(data.created_at ?? data.createdAt ?? data.create_time),
+        modelName: firstString(
+          data.model,
+          data.model_name,
+          data.modelName,
+          data.model_slug,
+          data.metadata?.model,
+          data.metadata?.model_name
+        ) || undefined,
         platform: 'claude',
         artifacts: artifacts.length > 0 ? artifacts : undefined
       }
 
       return conversation
     } catch (error) {
+      if (isProviderRateLimitError(error)) throw error
       console.error(`[Claude Parser] Error fetching conversation detail:`, error)
       return null
     }
@@ -623,7 +674,8 @@ export class ClaudeParser implements PlatformParser {
     const attachments = imageData.map(img => ({
       type: 'image' as const,
       url: img.url,
-      name: img.alt
+      name: img.alt,
+      uploaded: role === 'user'
     }))
 
     const messageId = element.getAttribute('data-message-id') ||
@@ -635,7 +687,12 @@ export class ClaudeParser implements PlatformParser {
       role,
       content: normalizeClaudeMarkdown(content),
       attachments: attachments.length > 0 ? attachments : undefined,
-      codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined
+      codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
+      timestamp: claudeTimestamp(
+        element.querySelector('time[datetime]')?.getAttribute('datetime')
+          || element.getAttribute('data-timestamp')
+          || element.getAttribute('data-created-at')
+      )
     }
   }
 
@@ -757,86 +814,14 @@ export const config = {
   matches: ['https://claude.ai/*']
 }
 
-// Main function to run when script loads
-async function main() {
-  if (parser.isConversationPage()) {
-    const conversation = await parser.parseCurrentConversation()
-    if (conversation) {
-      chrome.storage.local.set({
-        [`conversation-${conversation.id}`]: { ...conversation, timestamp: Date.now() }
-      })
-    }
-  }
-}
-
-// Listen for messages from popup
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'PARSE_CONVERSATION') {
-    parser.parseCurrentConversation().then(conversation => {
-      // API detail is preferred when available because it preserves markdown,
-      // artifacts, attachments, and assistant responses better than DOM text extraction.
-      const url = window.location.href
-      const match = url.match(/\/chat\/([a-f0-9-]+)/)
-      if (match) {
-        parser.fetchConversationDetail(match[1]).then(apiConv => {
-          sendResponse({ data: preferMoreCompleteConversation(conversation, apiConv) })
-        }).catch(err => {
-          console.error('[Claude Parser] API fetch error:', err)
-          sendResponse({ data: conversation })
-        })
-      } else {
-        sendResponse({ data: conversation })
-      }
-    }).catch(error => {
-      console.error('[Claude Parser] parseCurrentConversation error:', error)
-      sendResponse({ error: error.message })
-    })
-    return true // Keep message channel open
-  }
-
-  if (message.type === 'DETECT_PLATFORM') {
-    sendResponse({
-      data: {
-        platform: 'claude',
-        isConversationPage: parser.isConversationPage(),
-        title: parser.getConversationTitle()
-      }
-    })
-  }
-
-  if (message.type === 'FETCH_CONVERSATION_LIST') {
-    try {
-      const list = parser.getConversationList()
-      sendResponse({ data: list })
-    } catch (error) {
-      sendResponse({ error: (error as Error).message })
-    }
-  }
-
-  if (message.type === 'FETCH_ALL_CONVERSATIONS') {
-    parser.fetchAllConversations().then(list => {
-      sendResponse({ data: list })
-    }).catch(error => {
-      // Fall back to DOM-based list
-      try {
-        const fallbackList = parser.getConversationList()
-        sendResponse({ data: fallbackList })
-      } catch (e) {
-        sendResponse({ error: (error as Error).message })
-      }
-    })
-    return true
-  }
-
-  if (message.type === 'FETCH_CONVERSATION_DETAIL') {
-    parser.fetchConversationDetail(message.data?.id).then(conversation => {
-      sendResponse({ data: conversation })
-    }).catch(error => {
-      sendResponse({ error: error.message })
-    })
-    return true
-  }
+// Register the shared popup-message handler (see src/lib/parser-runtime.ts)
+registerParserMessageHandler({
+  platform: 'claude',
+  parser,
+  extractConversationId: url => url.match(/\/chat\/([a-f0-9-]+)/)?.[1] ?? null,
+  logApiError: error => console.error('[Claude Parser] API fetch error:', error),
+  logParseError: error => console.error('[Claude Parser] parseCurrentConversation error:', error)
 })
 
 // Run on page load
-main()
+runParserMain(parser)

@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fetchGrokConversationDetail, fetchGrokConversationList } from '../src/lib/grok-api'
+import { ProviderRateLimitError } from '../src/lib/provider-rate-limit'
 
 type FetchResponse = {
   ok: boolean
+  status?: number
   json: () => Promise<unknown>
 }
 
@@ -42,7 +44,7 @@ describe('Grok API adapter', () => {
       }))
       .mockResolvedValueOnce(jsonResponse({
         responses: [
-          { responseId: 'assistant-response', sender: 'ASSISTANT', message: 'The answer', createTime: '2026-07-14T08:00:02.000Z' },
+          { responseId: 'assistant-response', sender: 'ASSISTANT', message: 'The answer.<grok:render card_id="abc"><argument name="citation_id">92</argument></grok:render>', createTime: '2026-07-14T08:00:02.000Z' },
           { responseId: 'user-response', sender: 'human', message: 'The question', createTime: '2026-07-14T08:00:01.000Z' },
           { responseId: 'empty-response', sender: 'ASSISTANT', message: '   ' }
         ]
@@ -56,7 +58,7 @@ describe('Grok API adapter', () => {
       platform: 'grok',
       messages: [
         { id: 'user-response', role: 'user', content: 'The question' },
-        { id: 'assistant-response', role: 'assistant', content: 'The answer' }
+        { id: 'assistant-response', role: 'assistant', content: 'The answer.' }
       ]
     })
     expect(fetchFn).toHaveBeenCalledTimes(3)
@@ -124,5 +126,20 @@ describe('Grok API adapter', () => {
 
     await expect(fetchGrokConversationList(fetchFn)).resolves.toEqual([])
     expect(fetchFn).toHaveBeenCalledTimes(2)
+  })
+
+  it('surfaces an expired Grok session as an authentication error', async () => {
+    const fetchFn = vi.fn<(...args: any[]) => Promise<FetchResponse>>()
+      .mockResolvedValue({ ok: false, status: 401, json: async () => ({}) })
+
+    await expect(fetchGrokConversationList(fetchFn)).rejects.toThrow('Authentication required')
+  })
+
+  it('surfaces a 429 from Grok detail without retaining the provider response', async () => {
+    const fetchFn = vi.fn<(...args: any[]) => Promise<FetchResponse>>()
+      .mockResolvedValue({ ok: false, status: 429, json: async () => ({}) })
+
+    await expect(fetchGrokConversationDetail('other-conversation', fetchFn))
+      .rejects.toBeInstanceOf(ProviderRateLimitError)
   })
 })

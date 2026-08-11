@@ -9,7 +9,10 @@ if (!['chrome', 'firefox', 'unpacked'].includes(target)) {
 }
 
 const root = path.join(__dirname, '..')
-const buildDir = path.join(root, 'build', 'chrome-mv3-prod')
+// Chrome is the default build output. The release script sets BUILD_DIR for
+// the isolated Firefox staging directory so both manifests can be verified
+// without mutating one another.
+const buildDir = path.resolve(root, process.env.BUILD_DIR || 'build/chrome-mv3-prod')
 const manifest = JSON.parse(fs.readFileSync(path.join(buildDir, 'manifest.json'), 'utf8'))
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 

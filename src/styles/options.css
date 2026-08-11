@@ -1,5 +1,5 @@
 /**
- * Options Page Styles — full-page settings dashboard
+ * Options Page Styles — Archive Desk settings ledger
  * Shares CSS custom properties with popup.css, then overrides popup-only layout.
  */
 
@@ -42,6 +42,7 @@ body {
   overflow: visible;
 }
 
+/* ===== Editorial grid ===== */
 .options-container {
   width: min(920px, calc(100vw - 48px));
   max-width: none;
@@ -56,24 +57,26 @@ body {
   align-items: start;
 }
 
+/* ===== Masthead ===== */
 .options-hero {
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 24px 28px;
-  margin-bottom: 12px;
-  border-radius: var(--radius-lg);
+  padding: 22px 26px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-primary);
   border: 1px solid var(--border-light);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-sm);
 }
 
 .options-hero-title {
   display: flex;
   flex-direction: column;
   justify-content: center;
+  min-width: 0;
 }
 
 .options-hero-actions {
@@ -87,9 +90,11 @@ body {
   align-items: center;
   gap: 10px;
   color: var(--text-primary);
+  font-family: var(--font-display);
   font-size: 26px;
-  font-weight: 750;
+  font-weight: 600;
   line-height: 1.1;
+  letter-spacing: 0.005em;
 }
 
 .options-kicker {
@@ -104,29 +109,29 @@ body {
 .options-version {
   display: inline-flex;
   align-items: center;
-  height: 34px;
+  height: 30px;
   flex-shrink: 0;
-  padding: 0 14px;
+  padding: 0 12px;
   border: 1px solid var(--border-light);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--text-tertiary);
-  font-size: 12px;
-  font-weight: 700;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
 }
 
+/* ===== Cards ===== */
 .options-card {
   grid-column: span 6;
   margin-bottom: 0;
-  padding: 22px;
+  padding: 20px 22px;
   border-radius: var(--radius-md);
   background: var(--bg-primary);
   border: 1px solid var(--border-light);
   box-shadow: var(--shadow-sm);
 }
 
-.filename-card,
 .schedule-card {
   grid-column: 1 / -1;
 }
@@ -137,39 +142,105 @@ body {
 }
 
 .options-card-header {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-light);
 }
 
 .options-card-header h2 {
-  font-size: 16px;
-  letter-spacing: 0;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
   color: var(--text-primary);
   line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
-.options-section {
-  margin-bottom: 32px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--border-light);
+.schedule-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.options-section:last-child {
-  border-bottom: none;
-  margin-bottom: 0;
-  padding-bottom: 0;
+.schedule-card-header h2 {
+  margin: 0;
+  min-width: 0;
 }
 
-.options-section h2 {
+.schedule-card-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* The enable switch in the card header reuses the shared Toggle row; strip
+ * its row padding so it sits inline with the collapse button. */
+.schedule-card-header-actions .schedule-enable-toggle {
+  padding: 0;
+  gap: 10px;
+}
+
+.schedule-card-header-actions .schedule-enable-toggle .option-label {
   font-size: 12px;
-  font-weight: 600;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 16px;
+  white-space: nowrap;
 }
 
+.schedule-collapse-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.schedule-collapse-button:hover {
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+}
+
+.schedule-collapse-button:focus-visible {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+
+.schedule-collapse-button svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 160ms ease;
+}
+
+.schedule-collapse-button[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+.options-card-intro {
+  margin-bottom: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: 640px;
+}
+
+/* ===== Setting rows ===== */
 .options-row {
   display: flex;
   justify-content: flex-start;
@@ -180,19 +251,23 @@ body {
 
 .options-row > div:first-child {
   flex: 1;
+  min-width: 0;
   max-width: 520px;
 }
 
 .options-row .option-label {
   font-weight: 500;
   color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
 .options-row .option-description {
   font-size: 12px;
   color: var(--text-tertiary);
   margin-top: 4px;
-  max-width: 360px;
+  max-width: 380px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .options-row > select,
@@ -201,34 +276,15 @@ body {
   flex-shrink: 0;
 }
 
-.options-select,
-.options-control {
-  width: 176px !important;
+/* Compact control column for row-level selects and text inputs. The shared
+ * .select treatment (popup.css) supplies the chevron and border styling. */
+.options-row > .select,
+.options-row > .input {
+  width: 200px;
 }
 
-.options-select,
-.platform-controls select {
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' stroke='%2364748b' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-  background-size: 14px;
-  padding-right: 36px;
+.options-row > .select {
   height: 38px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-medium);
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-  font-size: 13px;
-  transition: var(--transition);
-}
-
-.options-select:focus-visible {
-  border-color: var(--primary);
-}
-
-.options-select:hover:not(:focus-visible) {
-  border-color: var(--text-tertiary);
 }
 
 .options-number {
@@ -236,7 +292,7 @@ body {
 }
 
 .options-range {
-  width: 176px;
+  width: 200px;
   cursor: pointer;
   accent-color: var(--primary);
 }
@@ -247,13 +303,7 @@ body {
   border-top: 1px solid var(--border-light);
 }
 
-.options-card-intro {
-  margin-bottom: 14px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
+/* ===== Filename preview — shows the true destination path ===== */
 .filename-preview {
   display: flex;
   align-items: center;
@@ -262,7 +312,7 @@ body {
   padding: 9px 11px;
   border: 1px dashed var(--border-medium);
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  background: var(--bg-secondary);
   color: var(--text-secondary);
   font-size: 12px;
 }
@@ -279,75 +329,371 @@ body {
 .filename-preview code {
   min-width: 0;
   color: var(--text-primary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }
 
-.schedule-panel {
+/* ===== Destination and DIY filename workbench ===== */
+.download-boundary-note {
   display: flex;
-  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
-  margin-top: 12px;
-  padding: 14px;
+  margin: 8px 0 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.download-boundary-title,
+.options-subsection-heading .option-label {
+  display: block;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.download-boundary-note .btn {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.filename-settings-panel {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-light);
+}
+
+.filename-settings-panel .filename-editor-open {
+  margin-top: 9px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+}
+
+.filename-settings-panel .filename-editor-open .input {
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+}
+
+.filename-settings-panel .filename-live-preview-box {
+  min-width: 0;
+}
+
+/* ===== Schedule rail — the always-legible output contract ===== */
+.schedule-rail {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
-  animation: fadeIn 200ms ease;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.schedule-rail-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+  padding: 10px 14px;
+}
+
+.schedule-rail-cell + .schedule-rail-cell {
+  border-left: 1px solid var(--border-light);
+}
+
+.schedule-rail-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.schedule-rail-value.is-on {
+  color: var(--success);
+}
+
+.schedule-rail-interval-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.schedule-rail-interval-control input {
+  width: 64px;
+  min-height: 30px;
+  padding: 4px 7px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: right;
+}
+
+.schedule-rail-interval-control input:hover:not(:focus-visible) {
+  border-color: var(--text-tertiary);
+}
+
+.schedule-rail-interval-control input:focus-visible {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+
+.schedule-rail-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+/* Markdown-only limitation (signal amber) and timing caveat */
+.schedule-note {
+  margin-bottom: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--warning);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-light);
+  color: var(--warning);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+/* ===== Schedule detail panel ===== */
+.schedule-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  animation: fadeIn 160ms ease;
 }
 
 .platform-schedule-section {
-  margin-top: 8px;
+  margin-bottom: 8px;
 }
 
-.platform-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 10px;
-}
-
-.platform-card {
-  padding: 12px;
+/* ===== Per-provider ledger ===== */
+.platform-ledger {
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.platform-row {
+  padding: 11px 14px;
   opacity: 0.62;
   transition: var(--transition);
 }
 
-.platform-card.is-enabled {
+.platform-row + .platform-row {
+  border-top: 1px solid var(--border-light);
+}
+
+.platform-row.is-enabled {
   opacity: 1;
 }
 
-.platform-controls {
-  display: grid;
-  grid-template-columns: 1fr 78px;
-  gap: 10px;
-  margin-top: 10px;
-  animation: fadeIn 150ms ease;
+.platform-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
 }
 
-.platform-controls label {
+/* The per-platform enable switch reuses the shared Toggle row; strip its
+ * row padding so it lines up with the ledger row it heads. */
+.platform-row-toggle {
+  padding: 0;
+  flex: 1;
+}
+
+.platform-row-toggle .option-label {
+  font-weight: 600;
+}
+
+.platform-row-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+  animation: fadeIn 140ms ease;
+}
+
+.platform-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  min-width: 0;
 }
 
-.platform-controls span {
+.platform-field > span {
   color: var(--text-tertiary);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
-.platform-controls select,
-.platform-controls input {
-  width: 100%;
-  min-height: 28px;
-  padding: 4px 8px;
-  font-size: 11px;
+.platform-field .schedule-control {
+  width: 100% !important;
+  min-height: 38px;
+  height: 38px;
+  padding: 0 34px 0 11px;
+  border-color: var(--border-medium);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1;
+  transition: var(--transition);
 }
 
+.platform-field .schedule-control:hover:not(:focus-visible) {
+  border-color: var(--text-tertiary);
+}
+
+.platform-field .schedule-control:focus-visible {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+
+.platform-field .schedule-time-control,
+.platform-field .schedule-number-control {
+  padding-right: 10px;
+}
+
+.platform-field .schedule-time-control {
+  font-family: var(--font-mono);
+  letter-spacing: 0.015em;
+}
+
+[data-theme='light'] .platform-field .schedule-time-control {
+  color-scheme: light;
+}
+
+[data-theme='dark'] .platform-field .schedule-time-control {
+  color-scheme: dark;
+}
+
+/* Advanced per-platform scheduling knobs tucked behind a disclosure. */
+.platform-advanced {
+  margin-top: 10px;
+}
+
+.platform-advanced > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.platform-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.platform-advanced > summary::before {
+  content: '▸';
+  transition: transform 160ms ease;
+}
+
+.platform-advanced[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.platform-advanced .platform-row-controls {
+  margin-top: 8px;
+}
+
+.platform-hint {
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.platform-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 7px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.platform-status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+  color: var(--text-secondary);
+}
+
+.platform-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.platform-status-chip.is-ready .platform-status-dot {
+  background: var(--success);
+}
+
+.platform-status-chip.is-auth_required .platform-status-dot,
+.platform-status-chip.is-error .platform-status-dot {
+  background: var(--error);
+}
+
+.platform-status-chip.is-rate_limited .platform-status-dot {
+  background: var(--warning);
+}
+
+.platform-status-chip.is-auth_required,
+.platform-status-chip.is-error {
+  color: var(--error);
+}
+
+.platform-status-chip.is-rate_limited {
+  color: var(--warning);
+}
+
+.platform-status-checked {
+  color: var(--text-tertiary);
+}
+
+.platform-next-run {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+/* ===== Status panel ===== */
 .status-panel {
   margin-top: 16px;
   padding: 13px 14px;
@@ -356,21 +702,90 @@ body {
   background: var(--bg-secondary);
 }
 
+.status-running {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.status-spinner {
+  width: 12px;
+  height: 12px;
+  border-color: var(--primary-light);
+  border-top-color: var(--primary);
+}
+
+.status-running-label {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.status-summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.status-counts {
+  display: flex;
+  gap: 14px;
+  margin-top: 2px;
+}
+
+.status-ok {
+  color: var(--success);
+}
+
+.status-bad {
+  color: var(--error);
+}
+
+.status-error {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.status-rate-limited,
+.status-cancelled {
+  margin-top: 7px;
+  padding: 7px 9px;
+  border-left: 2px solid var(--warning);
+  background: var(--warning-light);
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.status-stopping {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.status-stop-btn {
+  border-color: color-mix(in srgb, var(--error) 55%, var(--border-medium));
+  color: var(--error);
+}
+
+.status-stop-btn:hover:not(:disabled) {
+  background: var(--error-light);
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.status-empty {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
 .status-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
-}
-
-.btn-compact {
-  min-height: 30px;
-  padding: 5px 10px;
-  font-size: 11px;
-}
-
-.block {
-  display: block;
 }
 
 .text-primary {
@@ -381,33 +796,7 @@ body {
   cursor: pointer;
 }
 
-/* Save Notification */
-.save-notification {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  padding: 12px 20px;
-  background: var(--success);
-  color: white;
-  border-radius: var(--radius-md);
-  font-size: 14px;
-  font-weight: 500;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  animation: slideIn 0.3s ease-out;
-}
-
-@keyframes slideIn {
-  from {
-    transform: translateY(20px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-/* Responsive */
+/* ===== Responsive ===== */
 @media (max-width: 900px) {
   .options-container {
     width: min(100vw - 32px, 720px);
@@ -429,6 +818,20 @@ body {
   }
 }
 
+@media (max-width: 720px) {
+  .schedule-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .schedule-rail-cell:nth-child(3) {
+    border-left: none;
+  }
+
+  .schedule-rail-cell:nth-child(n + 3) {
+    border-top: 1px solid var(--border-light);
+  }
+}
+
 @media (max-width: 560px) {
   .options-container {
     width: calc(100vw - 24px);
@@ -442,6 +845,15 @@ body {
   .options-hero {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .schedule-card-header {
+    align-items: flex-start;
+  }
+
+  .schedule-card-header-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .options-row {
@@ -467,11 +879,21 @@ body {
     width: 100%;
   }
 
-  .platform-grid {
+  .platform-row-controls {
     grid-template-columns: 1fr;
   }
 
-  .platform-controls {
-    grid-template-columns: 1fr;
+  .platform-row-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .platform-next-run {
+    text-align: left;
+  }
+
+  .download-boundary-note {
+    flex-direction: column;
   }
 }

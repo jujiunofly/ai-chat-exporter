@@ -1,9 +1,8 @@
 /**
  * ConversationList Component
- * Gemini-inspired conversation list with selected state (indigo left border)
+ * Archive Desk library: a selection toolbar above compact ledger rows.
  */
 
-import React from 'react'
 import type { ConversationListItem } from '../lib/types'
 
 interface ConversationListProps {
@@ -18,8 +17,23 @@ interface ConversationListProps {
   T?: (key: string) => string
 }
 
+/** Platform display names */
+const PLATFORM_NAMES: Record<string, string> = {
+  chatgpt: 'ChatGPT',
+  gemini: 'Gemini',
+  claude: 'Claude',
+  deepseek: 'DeepSeek',
+  grok: 'Grok',
+}
+
+function formatConversationDate(timestamp?: number): string | null {
+  if (!Number.isFinite(timestamp)) return null
+  return new Date(timestamp as number).toLocaleDateString()
+}
+
 /**
- * List of conversations with selection checkboxes and Gemini-style selected state
+ * Library of conversations with an explicit selection toolbar
+ * (count + select-all/clear) and one selectable row per conversation.
  */
 export function ConversationList({
   conversations,
@@ -27,53 +41,72 @@ export function ConversationList({
   onSelect,
   onSelectAll,
   onDeselectAll,
-  onExport,
   loading = false,
   bulkLoading = false,
   T
 }: ConversationListProps) {
-  const allSelected = conversations.length > 0 && 
+  const tr = T ?? ((key: string) => key)
+  const allSelected = conversations.length > 0 &&
                      selectedIds.length === conversations.length
 
   return (
-    <div className="flex-col gap-2">
-      <div className="conv-list">
-        {conversations.map(conv => (
-          <label
-            key={conv.id}
-            className={`conv-item ${selectedIds.includes(conv.id) ? 'selected' : ''}`}
+    <div className="conv-library">
+      {conversations.length > 0 && (
+        <div className="conv-toolbar">
+          <span className="conv-count" aria-live="polite">
+            {selectedIds.length} / {conversations.length} {tr('selected')}
+          </span>
+          <button
+            type="button"
+            className="conv-toolbar-btn"
+            onClick={allSelected ? onDeselectAll : onSelectAll}
+            disabled={loading || bulkLoading}
+            aria-label={tr('Select all conversations')}
           >
-            <div className="checkbox-wrapper">
+            {allSelected ? tr('Deselect all') : tr('Select all')}
+          </button>
+        </div>
+      )}
+
+      <div className="conv-list" role="group" aria-label={tr('Conversation library')}>
+        {conversations.map(conv => {
+          const timestamp = conv.createdAt ?? conv.updatedAt
+          const date = formatConversationDate(timestamp)
+          const dateLabel = conv.createdAt ? tr('Started') : tr('Last active')
+
+          return (
+            <label
+              key={conv.id}
+              className={`conv-item ${selectedIds.includes(conv.id) ? 'selected' : ''}`}
+            >
               <input
                 type="checkbox"
                 className="checkbox"
                 checked={selectedIds.includes(conv.id)}
                 onChange={() => onSelect(conv.id)}
+                disabled={loading || bulkLoading}
+                aria-label={conv.title || 'Untitled'}
               />
-            </div>
-            <div className="flex-col flex-1 overflow-hidden">
-              <span
-                className="text-sm font-medium"
-                style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-              >
-                {conv.title || 'Untitled'}
-              </span>
-              <span className="text-xs text-muted">
-                {conv.platform === 'chatgpt' ? 'ChatGPT' : conv.platform === 'gemini' ? 'Gemini' : conv.platform === 'claude' ? 'Claude' : conv.platform === 'deepseek' ? 'DeepSeek' : conv.platform === 'grok' ? 'Grok' : 'Unknown'}
-                {conv.messageCount ? ` · ${conv.messageCount} messages` : ''}
-              </span>
-            </div>
-          </label>
-        ))}
+              <div className="conv-item-text">
+                <span className="conv-item-title">
+                  {conv.title || 'Untitled'}
+                </span>
+                <span className="conv-item-meta">
+                  {PLATFORM_NAMES[conv.platform] ?? 'Unknown'}
+                  {conv.messageCount ? ` · ${conv.messageCount} messages` : ''}
+                  {date ? ` · ${dateLabel}: ${date}` : conv.platform === 'gemini' ? ` · ${tr('Date unavailable')}` : ''}
+                </span>
+              </div>
+            </label>
+          )
+        })}
       </div>
-      
+
       {conversations.length === 0 && !bulkLoading && (
-        <div className="text-sm text-muted" style={{ textAlign: 'center', padding: '24px' }}>
-          {T ? T('No conversations found. Click Refresh to load.') : 'No conversations found. Click Refresh to load.'}
+        <div className="conv-empty">
+          {tr('No conversations found. Click Refresh to load.')}
         </div>
       )}
     </div>
   )
 }
-
-export default ConversationList

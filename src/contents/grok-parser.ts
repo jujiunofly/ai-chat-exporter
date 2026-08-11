@@ -4,17 +4,23 @@
  * - Uses data-message-author-role attribute (similar to ChatGPT)
  * - Cookie-based auth for API calls
  */
-import type { Conversation, ChatMessage, PlatformParser, ConversationListItem } from '../lib/types'
-import { generateId, extractTextContent, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
-import { preferMoreCompleteConversation } from '../lib/parser-fallback'
+import type { Conversation, ChatMessage, ConversationListItem } from '../lib/types'
+import { generateId, extractTextContent, extractTextWithMedia, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
+import { registerParserMessageHandler, runParserMain } from '../lib/parser-runtime'
 import { getGrokConversationId } from '../lib/grok-conversation-url'
 import { fetchGrokConversationDetail, fetchGrokConversationList } from '../lib/grok-api'
 
 /**
  * Grok parser implementation
  */
-export class GrokParser implements PlatformParser {
+export class GrokParser {
   platform = 'grok' as const
+  private authenticationRequired = false
+
+  /** Safe aggregate signal for the scheduled-export status surface. */
+  isAuthenticationRequired(): boolean {
+    return this.authenticationRequired
+  }
 
   /**
    * Check if current page is a Grok conversation
@@ -86,8 +92,16 @@ export class GrokParser implements PlatformParser {
    * visible sidebar only when the authenticated API cannot return a list.
    */
   async fetchAllConversations(): Promise<ConversationListItem[]> {
-    const conversations = await fetchGrokConversationList()
-    return conversations.length > 0 ? conversations : this.getConversationList()
+    try {
+      const conversations = await fetchGrokConversationList()
+      this.authenticationRequired = false
+      return conversations.length > 0 ? conversations : this.getConversationList()
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Authentication required') {
+        this.authenticationRequired = true
+      }
+      throw error
+    }
   }
 
   /**
@@ -173,7 +187,8 @@ export class GrokParser implements PlatformParser {
     const attachments = imageData.map(img => ({
       type: 'image' as const,
       url: img.url,
-      name: img.alt
+      name: img.alt,
+      uploaded: role === 'user'
     }))
 
     const messageId = element.getAttribute('data-message-id') || generateId()
@@ -238,8 +253,7 @@ export class GrokParser implements PlatformParser {
       '.markdown, [class*="markdown"], [class*="content"], [class*="text"]'
     ) || clone
 
-    const text = extractTextContent(contentElement)
-    return cleanText(text)
+    return cleanText(extractTextWithMedia(contentElement))
   }
 
   /**
@@ -316,83 +330,12 @@ export const config = {
   matches: ['https://grok.com/*', 'https://www.grok.com/*']
 }
 
-// Main function to run when script loads
-async function main() {
-  if (parser.isConversationPage()) {
-    const conversation = await parser.parseCurrentConversation()
-    if (conversation) {
-      chrome.storage.local.set({
-        [`conversation-${conversation.id}`]: { ...conversation, timestamp: Date.now() }
-      })
-    }
-  }
-}
-
-// Listen for messages from popup
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'PARSE_CONVERSATION') {
-    parser.parseCurrentConversation().then(conversation => {
-      // API detail is preferred when available because it preserves markdown,
-      // LaTeX, artifacts, and paragraph structure better than DOM text extraction.
-      const url = window.location.href
-      const id = getGrokConversationId(url)
-      if (id) {
-        parser.fetchConversationDetail(id).then(apiConv => {
-          sendResponse({ data: preferMoreCompleteConversation(conversation, apiConv) })
-        }).catch(() => {
-          sendResponse({ data: conversation })
-        })
-      } else {
-        sendResponse({ data: conversation })
-      }
-    }).catch(error => {
-      sendResponse({ error: error.message })
-    })
-    return true // Keep message channel open
-  }
-
-  if (message.type === 'DETECT_PLATFORM') {
-    sendResponse({
-      data: {
-        platform: 'grok',
-        isConversationPage: parser.isConversationPage(),
-        title: parser.getConversationTitle()
-      }
-    })
-  }
-
-  if (message.type === 'FETCH_CONVERSATION_LIST') {
-    try {
-      const list = parser.getConversationList()
-      sendResponse({ data: list })
-    } catch (error) {
-      sendResponse({ error: (error as Error).message })
-    }
-  }
-
-  if (message.type === 'FETCH_ALL_CONVERSATIONS') {
-    parser.fetchAllConversations().then(list => {
-      sendResponse({ data: list })
-    }).catch(error => {
-      try {
-        const fallbackList = parser.getConversationList()
-        sendResponse({ data: fallbackList })
-      } catch (e) {
-        sendResponse({ error: (error as Error).message })
-      }
-    })
-    return true
-  }
-
-  if (message.type === 'FETCH_CONVERSATION_DETAIL') {
-    parser.fetchConversationDetail(message.data?.id).then(conversation => {
-      sendResponse({ data: conversation })
-    }).catch(error => {
-      sendResponse({ error: error.message })
-    })
-    return true
-  }
+// Register the shared popup-message handler (see src/lib/parser-runtime.ts)
+registerParserMessageHandler({
+  platform: 'grok',
+  parser,
+  extractConversationId: getGrokConversationId
 })
 
 // Run on page load
-main()
+runParserMain(parser)

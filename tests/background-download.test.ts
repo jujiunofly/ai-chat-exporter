@@ -15,7 +15,7 @@ describe('background download filename behavior', () => {
     const source = readFileSync(join(process.cwd(), 'src/background.ts'), 'utf8')
 
     expect(source).not.toContain('URL.createObjectURL')
-    expect(source).toContain("textToDataUrl(markdown, 'text/markdown')")
+    expect(source).toContain("textToDataUrl(prepared.markdown, 'text/markdown')")
   })
 
   it('creates the snapshot cleanup alarm and gives stored conversations an expiry timestamp', () => {

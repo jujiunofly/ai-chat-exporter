@@ -7,15 +7,16 @@ import type {
   MessagePayload,
   Conversation,
   ExtensionSettings,
-  BulkExportProgress,
   ScheduledExportSettings,
   ScheduledExportStatus,
+  ScheduledExportPlatformState,
   ExportablePlatform,
   ExportedConversationRecord,
   ConversationListItem,
   ExportOptions,
+  ScheduledExportFailureReason,
 } from './lib/types'
-import { DEFAULT_SETTINGS } from './lib/types'
+import { DEFAULT_SETTINGS, mergeExtensionSettings } from './lib/types'
 import { conversationToMarkdown } from './lib/export-markdown'
 import { generateFilename } from './lib/filename'
 import { buildDownloadFilename } from './lib/download-path'
@@ -25,38 +26,282 @@ import { downloadAndWait } from './lib/download-completion'
 import { isConversationComplete } from './lib/conversation-integrity'
 import {
   getDefaultScheduledExportSettings,
-  isDueForRun,
+  clampScheduledCheckIntervalMinutes,
+  clampScheduledIntervalMinutes,
+  isDueForSchedule,
   delay,
   PLATFORM_URLS,
   ALL_PLATFORMS,
   shouldAdvanceScheduledLastRun,
+  ScheduledRunBudget,
+  mergeScheduledExportSettings,
+  runWithConcurrency,
+  ScheduledConcurrencyGate,
+  ScheduledRequestPacer,
+  throwIfExportCancelled,
+  isExportCancelledError,
+  EXPORT_CANCELLED_MESSAGE,
+  isAuthenticationRequiredError,
+  isLikelyProviderLoginUrl,
 } from './lib/scheduled-export'
+import { isProviderRateLimitError } from './lib/provider-rate-limit'
 
 // A module-level single-flight guard closes the async gap between checking
 // storage and setting the per-platform status. The storage status remains the
 // restart-visible diagnostic; this guard prevents duplicate runs in one
 // service-worker lifetime.
 let scheduledRunPromise: Promise<void> | null = null
+let scheduledRunController: AbortController | null = null
 
-// Default settings
-const _DEFAULT_SETTINGS: ExtensionSettings = DEFAULT_SETTINGS
+// Manifest V3 can suspend and recreate this service worker at any time. Keep
+// the resources that belong to a scheduled run in extension storage so Stop
+// still has something concrete to cancel after a restart, rather than relying
+// only on the AbortController above.
+export const SCHEDULED_ACTIVE_RUN_KEY = 'scheduledExport-activeRun'
+export const SCHEDULED_STOP_REQUEST_KEY = 'scheduledExport-stopRequest'
+
+interface PersistedScheduledRun {
+  id: string
+  startedAt: number
+  tabIds: number[]
+  downloadIds: number[]
+  stopRequestedAt?: number
+}
+
+interface PersistedScheduledStopRequest {
+  runId: string
+  requestedAt: number
+}
+
+let scheduledRunStateWrites: Promise<void> = Promise.resolve()
+let scheduledRunStopRequestedId: string | null = null
+
+function createScheduledRunId(): string {
+  const randomId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2)
+  return `scheduled-${Date.now()}-${randomId}`
+}
+
+function readResourceIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.filter((item): item is number => Number.isSafeInteger(item) && item >= 0))]
+}
+
+function readPersistedScheduledRun(value: unknown): PersistedScheduledRun | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Partial<PersistedScheduledRun>
+  if (typeof candidate.id !== 'string' || !candidate.id || !Number.isFinite(candidate.startedAt)) return null
+  return {
+    id: candidate.id,
+    startedAt: candidate.startedAt,
+    tabIds: readResourceIds(candidate.tabIds),
+    downloadIds: readResourceIds(candidate.downloadIds),
+    stopRequestedAt: Number.isFinite(candidate.stopRequestedAt) ? candidate.stopRequestedAt : undefined,
+  }
+}
+
+function readPersistedStopRequest(value: unknown): PersistedScheduledStopRequest | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Partial<PersistedScheduledStopRequest>
+  if (typeof candidate.runId !== 'string' || !candidate.runId || !Number.isFinite(candidate.requestedAt)) {
+    return null
+  }
+  return { runId: candidate.runId, requestedAt: candidate.requestedAt }
+}
+
+/** Serialize resource-list updates from parallel provider workers. */
+async function updatePersistedScheduledRun(
+  runId: string,
+  mutate: (run: PersistedScheduledRun) => void,
+  allowStopped = false
+): Promise<boolean> {
+  let updated = false
+  const write = scheduledRunStateWrites
+    .catch(() => undefined)
+    .then(async () => {
+      const stored = await chrome.storage.local.get(SCHEDULED_ACTIVE_RUN_KEY)
+      const run = readPersistedScheduledRun(stored[SCHEDULED_ACTIVE_RUN_KEY])
+      if (!run || run.id !== runId || (!allowStopped && run.stopRequestedAt)) return
+      mutate(run)
+      await chrome.storage.local.set({ [SCHEDULED_ACTIVE_RUN_KEY]: run })
+      updated = true
+    })
+  scheduledRunStateWrites = write.catch(() => undefined)
+  await write
+  return updated
+}
+
+async function registerScheduledRunResource(
+  runId: string,
+  resource: 'tabIds' | 'downloadIds',
+  id: number
+): Promise<boolean> {
+  return updatePersistedScheduledRun(runId, run => {
+    if (!run[resource].includes(id)) run[resource].push(id)
+  })
+}
+
+async function releaseScheduledRunResource(
+  runId: string,
+  resource: 'tabIds' | 'downloadIds',
+  id: number
+): Promise<void> {
+  await updatePersistedScheduledRun(runId, run => {
+    run[resource] = run[resource].filter(item => item !== id)
+  }, true)
+}
+
+async function registerScheduledRunTab(runId: string | undefined, tabId: number): Promise<void> {
+  if (!runId) return
+  try {
+    if (await registerScheduledRunResource(runId, 'tabIds', tabId)) return
+  } catch (error) {
+    try { await chrome.tabs.remove(tabId) } catch {}
+    throw error
+  }
+  try { await chrome.tabs.remove(tabId) } catch {}
+  throw new Error(EXPORT_CANCELLED_MESSAGE)
+}
+
+async function registerScheduledRunDownload(runId: string | undefined, downloadId: number): Promise<void> {
+  if (!runId) return
+  try {
+    if (await registerScheduledRunResource(runId, 'downloadIds', downloadId)) return
+  } catch (error) {
+    try { await chrome.downloads.cancel(downloadId) } catch {}
+    throw error
+  }
+  try { await chrome.downloads.cancel(downloadId) } catch {}
+  throw new Error(EXPORT_CANCELLED_MESSAGE)
+}
+
+async function beginPersistedScheduledRun(runId: string): Promise<void> {
+  // If the worker was restarted mid-run, its JavaScript queue is already gone
+  // but a browser tab or download can still exist. Close those leftovers
+  // before replacing the record with a fresh run.
+  const existing = await chrome.storage.local.get(SCHEDULED_ACTIVE_RUN_KEY)
+  const staleRun = readPersistedScheduledRun(existing[SCHEDULED_ACTIVE_RUN_KEY])
+  if (staleRun) await cancelPersistedScheduledRunResources(staleRun)
+  await chrome.storage.local.set({
+    [SCHEDULED_ACTIVE_RUN_KEY]: {
+      id: runId,
+      startedAt: Date.now(),
+      tabIds: [],
+      downloadIds: [],
+    } satisfies PersistedScheduledRun,
+    [SCHEDULED_STOP_REQUEST_KEY]: null,
+  })
+}
+
+async function clearPersistedScheduledRun(runId: string): Promise<void> {
+  await scheduledRunStateWrites.catch(() => undefined)
+  const stored = await chrome.storage.local.get([
+    SCHEDULED_ACTIVE_RUN_KEY,
+    SCHEDULED_STOP_REQUEST_KEY,
+  ])
+  const run = readPersistedScheduledRun(stored[SCHEDULED_ACTIVE_RUN_KEY])
+  const stopRequest = readPersistedStopRequest(stored[SCHEDULED_STOP_REQUEST_KEY])
+  const keys: string[] = []
+  if (run?.id === runId) keys.push(SCHEDULED_ACTIVE_RUN_KEY)
+  if (stopRequest?.runId === runId) keys.push(SCHEDULED_STOP_REQUEST_KEY)
+  if (keys.length > 0) await chrome.storage.local.remove(keys)
+}
+
+function watchPersistedScheduledStop(runId: string, controller: AbortController): () => void {
+  const onChanged = chrome.storage?.onChanged
+  if (!onChanged?.addListener) return () => undefined
+  const listener = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+    if (areaName !== 'local') return
+    const request = readPersistedStopRequest(changes[SCHEDULED_STOP_REQUEST_KEY]?.newValue)
+    if (request?.runId === runId) {
+      scheduledRunStopRequestedId = runId
+      controller.abort()
+    }
+  }
+  onChanged.addListener(listener)
+  return () => onChanged.removeListener(listener)
+}
+
+function stoppedScheduledStatus(status: ScheduledExportStatus, finishedAt = Date.now()): ScheduledExportStatus {
+  return {
+    ...status,
+    isRunning: false,
+    currentPlatform: undefined,
+    activePlatforms: [],
+    lastRunCancelled: true,
+    stopRequested: false,
+    lastRunFinishedAt: finishedAt,
+  }
+}
+
+async function cancelPersistedScheduledRunResources(run: PersistedScheduledRun): Promise<void> {
+  await Promise.all([
+    ...run.downloadIds.map(id => Promise.resolve(chrome.downloads.cancel(id)).catch(() => undefined)),
+    ...run.tabIds.map(id => Promise.resolve(chrome.tabs.remove(id)).catch(() => undefined)),
+  ])
+}
+
+// Foreground bulk export can fall back to an inactive tab when the current
+// provider page does not expose the selected conversation. Keep those fetches
+// independently abortable so the popup's Stop action also closes the fallback
+// tab instead of merely hiding its progress UI.
+const foregroundDetailFetchControllers = new Map<string, AbortController>()
+
+const SCHEDULED_EXPORT_ALARM_NAME = 'scheduled-export-check'
+/**
+ * Chrome alarms are only the wake-up mechanism; each platform still decides
+ * whether it is due from its own last-run checkpoint. The global cadence is
+ * user-configurable; a shorter enabled platform interval still wins so its
+ * configured due time is never postponed by the wake-up cadence.
+ */
+export function getScheduledExportAlarmPeriodMinutes(
+  config: Pick<ScheduledExportSettings, 'platforms'> & Partial<Pick<ScheduledExportSettings, 'checkIntervalMinutes'>>,
+): number {
+  const configuredInterval = clampScheduledCheckIntervalMinutes(config.checkIntervalMinutes)
+  const customIntervals = ALL_PLATFORMS
+    .map(platform => config.platforms[platform])
+    .filter(platform => platform?.enabled && platform.frequency === 'custom')
+    .map(platform => clampScheduledIntervalMinutes(platform?.intervalMinutes))
+
+  return Math.max(
+    1,
+    Math.min(configuredInterval, ...customIntervals),
+  )
+}
+
+async function syncScheduledExportAlarm(): Promise<void> {
+  try {
+    const config = await getScheduledExportSettings()
+    if (!config.enabled) {
+      await chrome.alarms.clear(SCHEDULED_EXPORT_ALARM_NAME)
+      return
+    }
+    await chrome.alarms.create(SCHEDULED_EXPORT_ALARM_NAME, {
+      periodInMinutes: getScheduledExportAlarmPeriodMinutes(config),
+    })
+  } catch {
+    // Alarm setup is best-effort. The next worker start retries it.
+  }
+}
 
 // Listen for extension installation
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     // Set default settings on first install
-    chrome.storage.local.set({ settings: DEFAULT_SETTINGS })
-    // Create the scheduled export checker alarm (every 15 minutes)
-    chrome.alarms.create('scheduled-export-check', { periodInMinutes: 15 })
+    void chrome.storage.local.set({ settings: DEFAULT_SETTINGS }).then(() => syncScheduledExportAlarm())
     chrome.alarms.create('cleanup-exports', { periodInMinutes: 60 })
   }
 })
 
-// Ensure alarm exists on startup (in case it was cleared)
-chrome.alarms.get('scheduled-export-check', (alarm) => {
-  if (!alarm) {
-    chrome.alarms.create('scheduled-export-check', { periodInMinutes: 15 })
-  }
+// Ensure the alarm exists on startup and follows the saved global cadence.
+void syncScheduledExportAlarm()
+
+// The options page persists settings directly so every control can autosave.
+// React to that storage event as well, otherwise a newly selected interval
+// would not change the alarm until the next worker restart.
+chrome.storage?.onChanged?.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes.settings) void syncScheduledExportAlarm()
 })
 
 // Conversation snapshots are only needed briefly for the preview page. Keep
@@ -86,38 +331,30 @@ async function handleMessage(
   sender: chrome.runtime.MessageSender
 ): Promise<{ data?: unknown; error?: string }> {
   switch (message.type) {
-    case 'GET_SETTINGS':
-      return handleGetSettings()
-    
-    case 'SETTINGS_UPDATED':
-      return handleSettingsUpdated(message.data as ExtensionSettings)
-    
     case 'EXPORT_REQUEST':
       return handleExportRequest(message.data as { conversation: Conversation; format: string; filename?: string }, sender)
     
-    case 'DETECT_PLATFORM':
-      return handleDetectPlatform(sender)
-    
-    case 'FETCH_CONVERSATION_LIST':
-      return handleFetchConversationList(sender)
-
-    case 'FETCH_ALL_CONVERSATIONS':
-      return handleFetchAllConversations(sender)
-
     case 'FETCH_CONVERSATION_DETAIL_IN_BACKGROUND_TAB':
-      return handleFetchConversationDetailInBackgroundTab(message.data as ConversationListItem)
+      return handleForegroundConversationDetailRequest(
+        message.data as ConversationListItem | BackgroundConversationDetailRequest
+      )
+
+    case 'CANCEL_BACKGROUND_CONVERSATION_FETCH':
+      return handleCancelForegroundConversationDetailRequest(
+        (message.data as { requestId?: string } | undefined)?.requestId
+      )
 
     case 'SCHEDULED_EXPORT_RUN':
       return handleScheduledExportRun()
     
-    case 'SCHEDULED_EXPORT_STATUS':
-      return handleScheduledExportStatus()
-    
-    case 'SCHEDULED_EXPORT_CONFIG':
-      return handleScheduledExportConfig(message.data as Partial<ScheduledExportSettings> | undefined)
-    
     case 'SCHEDULED_EXPORT_CLEAR_HISTORY':
       return handleClearExportHistory()
+
+    case 'SCHEDULED_EXPORT_STOP':
+      return handleScheduledExportStop()
+
+    case 'GET_EXPORTED_CONVERSATION_IDS':
+      return handleGetExportedConversationIds(message.data as ExportablePlatform)
 
     default:
       return { error: `Unknown message type: ${message.type}` }
@@ -125,29 +362,37 @@ async function handleMessage(
 }
 
 /**
- * Get extension settings
+ * Build the same Markdown export policy used by interactive exports.
  */
-async function handleGetSettings(): Promise<{ data: ExtensionSettings }> {
-  try {
-    const result = await chrome.storage.local.get('settings')
-    // Merge with defaults for any new fields
-    return { data: { ...DEFAULT_SETTINGS, ...(result.settings || {}) } }
-  } catch (error) {
-    return { data: DEFAULT_SETTINGS }
+export function buildScheduledExportOptions(
+  format: ExportOptions['format'],
+  settings?: Partial<ExtensionSettings>
+): ExportOptions {
+  const resolved = mergeExtensionSettings(settings)
+  return {
+    format,
+    includeMetadata: resolved.includeMetadata,
+    includeCodeBlocks: resolved.includeCodeBlocks,
+    includeImages: resolved.includeImages,
+    exportArtifacts: resolved.exportArtifacts,
+    includeUploadedFiles: resolved.includeUploadedFiles,
+    filenamePattern: resolved.filenamePattern,
+    assistantDisplayName: resolved.assistantDisplayName,
+    showMessageTimestamps: resolved.showMessageTimestamps,
+    locale: resolved.locale,
   }
 }
 
 /**
- * Handle settings update
+ * Read the current global export policy. Scheduled exports can safely fall
+ * back to defaults when storage is temporarily unavailable.
  */
-async function handleSettingsUpdated(
-  settings: ExtensionSettings
-): Promise<{ data: boolean }> {
+async function getResolvedExtensionSettings(): Promise<ExtensionSettings> {
   try {
-    await chrome.storage.local.set({ settings })
-    return { data: true }
-  } catch (error) {
-    return { data: false }
+    const result = await chrome.storage.local.get('settings')
+    return mergeExtensionSettings(result.settings)
+  } catch {
+    return DEFAULT_SETTINGS
   }
 }
 
@@ -164,9 +409,6 @@ async function handleExportRequest(
     }
     
     const conversationId = data.conversation.id
-    await chrome.storage.local.set({
-      [`export-${conversationId}`]: { ...data.conversation, timestamp: Date.now() }
-    })
 
     // Track this completed export so scheduled scans can deduplicate it.
     await markAsExported({
@@ -184,91 +426,14 @@ async function handleExportRequest(
 }
 
 /**
- * Detect platform from sender tab
- */
-async function handleDetectPlatform(
-  sender: chrome.runtime.MessageSender
-): Promise<{ data?: { platform: string; url: string }; error?: string }> {
-  try {
-    if (!sender.tab?.url) {
-      return { error: 'No tab URL available' }
-    }
-    
-    const url = new URL(sender.tab.url)
-    let platform = 'unknown'
-    
-    if (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') {
-      platform = 'chatgpt'
-    } else if (url.hostname === 'gemini.google.com') {
-      platform = 'gemini'
-    } else if (url.hostname === 'claude.ai') {
-      platform = 'claude'
-    } else if (url.hostname === 'deepseek.com' || url.hostname === 'chat.deepseek.com') {
-      platform = 'deepseek'
-    } else if (url.hostname === 'grok.com' || url.hostname === 'www.grok.com') {
-      platform = 'grok'
-    }
-    
-    return {
-      data: {
-        platform,
-        url: sender.tab.url
-      }
-    }
-  } catch (error) {
-    return { error: 'Failed to detect platform' }
-  }
-}
-
-/**
- * Handle fetching conversation list from content script (DOM-based)
- */
-async function handleFetchConversationList(
-  sender: chrome.runtime.MessageSender
-): Promise<{ data?: unknown[]; error?: string }> {
-  try {
-    if (!sender.tab?.id) {
-      return { error: 'No tab ID available' }
-    }
-    
-    const response = await chrome.tabs.sendMessage(sender.tab.id, {
-      type: 'FETCH_CONVERSATION_LIST'
-    })
-    
-    return response
-  } catch (error) {
-    return { error: 'Failed to fetch conversation list' }
-  }
-}
-
-/**
- * Handle fetching ALL conversations via API (forwarded to content script)
- */
-async function handleFetchAllConversations(
-  sender: chrome.runtime.MessageSender
-): Promise<{ data?: unknown[]; error?: string }> {
-  try {
-    if (!sender.tab?.id) {
-      return { error: 'No tab ID available' }
-    }
-    
-    const response = await chrome.tabs.sendMessage(sender.tab.id, {
-      type: 'FETCH_ALL_CONVERSATIONS'
-    })
-    
-    return response
-  } catch (error) {
-    return { error: 'Failed to fetch all conversations' }
-  }
-}
-
-/**
  * Parses a selected conversation in its own inactive tab. This is the fallback
  * for providers such as Grok whose content script can only read the currently
  * loaded conversation DOM.
  */
 async function handleFetchConversationDetailInBackgroundTab(
-  item: ConversationListItem
+  item: ConversationListItem,
+  signal?: AbortSignal,
+  scheduledRunId?: string
 ): Promise<{ data?: Conversation; error?: string }> {
   if (!item?.url || !item?.id) {
     return { error: 'Conversation URL is unavailable' }
@@ -276,15 +441,18 @@ async function handleFetchConversationDetailInBackgroundTab(
 
   let tabId: number | null = null
   try {
+    throwIfExportCancelled(signal)
     const tab = await chrome.tabs.create({ url: item.url, active: false })
     tabId = tab.id ?? null
     if (!tabId) return { error: 'Failed to open the selected conversation' }
+    await registerScheduledRunTab(scheduledRunId, tabId)
 
-    await waitForTabComplete(tabId, 30000)
-    await waitForContentScript(tabId, item.platform, 10000)
+    await waitForTabComplete(tabId, 30000, signal)
+    await waitForContentScript(tabId, item.platform, 10000, signal)
 
     const deadline = Date.now() + 20000
     while (Date.now() < deadline) {
+      throwIfExportCancelled(signal)
       try {
         const response = await chrome.tabs.sendMessage(tabId, { type: 'PARSE_CONVERSATION' })
         const conversation = response?.data as Conversation | null | undefined
@@ -294,11 +462,12 @@ async function handleFetchConversationDetailInBackgroundTab(
       } catch {
         // The page may still be hydrating its messages.
       }
-      await delay(750)
+      await delay(750, signal)
     }
 
     return { error: `No content became available for ${item.title || item.id}` }
   } catch (error) {
+    if (isExportCancelledError(error)) throw error
     return { error: error instanceof Error ? error.message : 'Failed to load the selected conversation' }
   } finally {
     if (tabId) {
@@ -307,8 +476,56 @@ async function handleFetchConversationDetailInBackgroundTab(
       } catch {
         // The tab may already have been closed.
       }
+      if (scheduledRunId) {
+        try {
+          await releaseScheduledRunResource(scheduledRunId, 'tabIds', tabId)
+        } catch {
+          // The enclosing scheduled run clears any remaining resource record.
+        }
+      }
     }
   }
+}
+
+interface BackgroundConversationDetailRequest {
+  item: ConversationListItem
+  requestId?: string
+}
+
+/**
+ * Bridge a popup cancellation token into a background-tab fallback. Scheduled
+ * jobs call the underlying function directly with their own AbortSignal.
+ */
+async function handleForegroundConversationDetailRequest(
+  request: ConversationListItem | BackgroundConversationDetailRequest
+): Promise<{ data?: Conversation; error?: string }> {
+  const wrapped = request as BackgroundConversationDetailRequest
+  const item = wrapped.item ?? request as ConversationListItem
+  const requestId = typeof wrapped.requestId === 'string' ? wrapped.requestId : undefined
+  if (!requestId) return handleFetchConversationDetailInBackgroundTab(item)
+
+  // A duplicate id should never occur from the popup, but abort the older
+  // request defensively rather than leaving a hidden tab behind.
+  foregroundDetailFetchControllers.get(requestId)?.abort()
+  const controller = new AbortController()
+  foregroundDetailFetchControllers.set(requestId, controller)
+  try {
+    return await handleFetchConversationDetailInBackgroundTab(item, controller.signal)
+  } finally {
+    if (foregroundDetailFetchControllers.get(requestId) === controller) {
+      foregroundDetailFetchControllers.delete(requestId)
+    }
+  }
+}
+
+async function handleCancelForegroundConversationDetailRequest(
+  requestId?: string
+): Promise<{ data: boolean }> {
+  if (!requestId) return { data: false }
+  const controller = foregroundDetailFetchControllers.get(requestId)
+  if (!controller) return { data: false }
+  controller.abort()
+  return { data: true }
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -321,8 +538,8 @@ async function handleFetchConversationDetailInBackgroundTab(
 async function getScheduledExportSettings(): Promise<ScheduledExportSettings> {
   try {
     const result = await chrome.storage.local.get('settings')
-    const settings = result.settings || DEFAULT_SETTINGS
-    return (settings as ExtensionSettings).scheduledExport || getDefaultScheduledExportSettings()
+    const settings = mergeExtensionSettings(result.settings)
+    return mergeScheduledExportSettings(settings.scheduledExport)
   } catch {
     return getDefaultScheduledExportSettings()
   }
@@ -343,45 +560,6 @@ async function handleScheduledExportRun(): Promise<{ data?: boolean; error?: str
 }
 
 /**
- * Handle status query
- */
-async function handleScheduledExportStatus(): Promise<{ data?: ScheduledExportStatus; error?: string }> {
-  try {
-    const result = await chrome.storage.local.get('scheduledExportStatus')
-    return { data: result.scheduledExportStatus || null }
-  } catch (err) {
-    return { error: (err as Error).message }
-  }
-}
-
-/**
- * Handle config update
- */
-async function handleScheduledExportConfig(
-  partial?: Partial<ScheduledExportSettings>
-): Promise<{ data?: ScheduledExportSettings; error?: string }> {
-  try {
-    const current = await getScheduledExportSettings()
-    const updated = { ...current, ...partial } as ScheduledExportSettings
-
-    // Also update the parent settings object
-    const settingsResult = await chrome.storage.local.get('settings')
-    const parentSettings = { ...DEFAULT_SETTINGS, ...(settingsResult.settings || {}) } as ExtensionSettings
-    parentSettings.scheduledExport = updated
-    await chrome.storage.local.set({ settings: parentSettings })
-
-    // Update alarms if enabled/disabled
-    if (updated.enabled) {
-      chrome.alarms.create('scheduled-export-check', { periodInMinutes: 15 })
-    }
-
-    return { data: updated }
-  } catch (err) {
-    return { error: (err as Error).message }
-  }
-}
-
-/**
  * Handle clearing export history
  */
 async function handleClearExportHistory(): Promise<{ data?: boolean; error?: string }> {
@@ -393,13 +571,61 @@ async function handleClearExportHistory(): Promise<{ data?: boolean; error?: str
   }
 }
 
+/**
+ * Stop the active scheduled queue. The active run and its resource IDs are
+ * persisted because a Manifest V3 worker may be recreated between starting a
+ * queue and a user pressing Stop.
+ */
+export async function handleScheduledExportStop(): Promise<{ data?: boolean; error?: string }> {
+  const now = Date.now()
+  try {
+    const stored = await chrome.storage.local.get([
+      'scheduledExportStatus',
+      SCHEDULED_ACTIVE_RUN_KEY,
+    ])
+    const status = stored.scheduledExportStatus as ScheduledExportStatus | undefined
+    const persistedRun = readPersistedScheduledRun(stored[SCHEDULED_ACTIVE_RUN_KEY])
+    const activeRunId = persistedRun?.id ?? status?.runId
+    const hasInMemoryRun = Boolean(scheduledRunController && scheduledRunPromise)
+
+    if (activeRunId) {
+      scheduledRunStopRequestedId = activeRunId
+      const stopUpdate: Record<string, unknown> = {
+        [SCHEDULED_STOP_REQUEST_KEY]: { runId: activeRunId, requestedAt: now } satisfies PersistedScheduledStopRequest,
+      }
+      if (persistedRun) {
+        stopUpdate[SCHEDULED_ACTIVE_RUN_KEY] = { ...persistedRun, stopRequestedAt: now }
+      }
+      await chrome.storage.local.set(stopUpdate)
+      if (persistedRun) await cancelPersistedScheduledRunResources(persistedRun)
+    }
+
+    scheduledRunController?.abort()
+
+    if (status?.isRunning) {
+      await chrome.storage.local.set({
+        scheduledExportStatus: hasInMemoryRun
+          ? { ...status, lastRunCancelled: true, stopRequested: true }
+          : stoppedScheduledStatus(status, now),
+      })
+    }
+
+    // A controller can be temporarily absent after a worker restart. In that
+    // case we still canceled the persisted browser resources and cleared the
+    // stale running state above, so the user receives a successful stop.
+    return { data: Boolean(activeRunId || hasInMemoryRun || status?.isRunning) }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not stop scheduled export' }
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────
 // Scheduled Export: Alarm Handler & Core Logic
 // ──────────────────────────────────────────────────────────────────
 
 // Handle alarms
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === 'scheduled-export-check') {
+  if (alarm.name === SCHEDULED_EXPORT_ALARM_NAME) {
     startScheduledExport(false)
   }
   if (alarm.name !== 'cleanup-exports') return
@@ -408,7 +634,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     const now = Date.now()
     
     for (const [key, value] of Object.entries(items)) {
-      if ((key.startsWith('export-') || key.startsWith('conversation-')) && typeof value === 'object' && value !== null) {
+      if (key.startsWith('conversation-') && typeof value === 'object' && value !== null) {
         const data = value as { timestamp?: number }
         if (data.timestamp && now - data.timestamp > 3600000) {
           await chrome.storage.local.remove(key)
@@ -423,20 +649,104 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 /**
  * Main entry: check all platforms and run scheduled exports as needed
  */
-async function checkAndRunScheduledExports(force = false): Promise<void> {
+interface ScheduledStatusReporter {
+  status: ScheduledExportStatus
+  markProviderActive: (platform: ExportablePlatform) => void
+  markProviderInactive: (platform: ExportablePlatform) => void
+  markPlatformStatus: (platform: ExportablePlatform, state: ScheduledExportPlatformState) => void
+  persist: () => Promise<void>
+  flush: () => Promise<void>
+}
+
+/**
+ * Multiple providers may finish at nearly the same time. Persist status writes
+ * in order so one worker cannot overwrite another worker's counts or active
+ * platform list.
+ */
+function createScheduledStatusReporter(status: ScheduledExportStatus): ScheduledStatusReporter {
+  let writes = Promise.resolve()
+
+  const snapshot = (): ScheduledExportStatus => ({
+    ...status,
+    activePlatforms: [...(status.activePlatforms ?? [])],
+    lastRunRateLimitedPlatforms: [...(status.lastRunRateLimitedPlatforms ?? [])],
+    platformStatuses: status.platformStatuses
+      ? Object.fromEntries(
+        Object.entries(status.platformStatuses).map(([platform, value]) => [platform, value ? { ...value } : value])
+      ) as ScheduledExportStatus['platformStatuses']
+      : undefined,
+  })
+
+  const persist = () => {
+    const next = snapshot()
+    writes = writes
+      .catch(() => undefined)
+      .then(() => chrome.storage.local.set({ scheduledExportStatus: next }))
+      .catch(() => undefined)
+    return writes
+  }
+
+  const syncCurrentPlatform = () => {
+    status.currentPlatform = status.activePlatforms?.[0]
+  }
+
+  return {
+    status,
+    markProviderActive(platform) {
+      const active = status.activePlatforms ?? (status.activePlatforms = [])
+      if (!active.includes(platform)) active.push(platform)
+      syncCurrentPlatform()
+      void persist()
+    },
+    markProviderInactive(platform) {
+      status.activePlatforms = (status.activePlatforms ?? []).filter(item => item !== platform)
+      syncCurrentPlatform()
+      void persist()
+    },
+    markPlatformStatus(platform, state) {
+      const statuses = status.platformStatuses ?? (status.platformStatuses = {})
+      statuses[platform] = { state, checkedAt: Date.now() }
+      void persist()
+    },
+    persist,
+    async flush() {
+      await writes
+    },
+  }
+}
+
+async function checkAndRunScheduledExports(
+  force = false,
+  signal?: AbortSignal,
+  runId?: string
+): Promise<void> {
+  throwIfExportCancelled(signal)
   const config = await getScheduledExportSettings()
   if (!config.enabled && !force) return
+  throwIfExportCancelled(signal)
 
   // Prevent concurrent runs
   const statusResult = await chrome.storage.local.get('scheduledExportStatus')
   const currentStatus = statusResult.scheduledExportStatus as ScheduledExportStatus | undefined
-  if (currentStatus?.isRunning && currentStatus.lastRunAt && Date.now() - currentStatus.lastRunAt < 2 * 60 * 60 * 1000) return
+  // A different run ID can only come from a previous service-worker lifetime:
+  // this process has no live JS queue for it. Close that stale status before
+  // starting a new queue so it cannot make the UI look permanently "running".
+  if (currentStatus?.isRunning && currentStatus.runId !== runId) {
+    await chrome.storage.local.set({
+      scheduledExportStatus: stoppedScheduledStatus(currentStatus),
+    })
+  }
+  if (
+    currentStatus?.isRunning &&
+    currentStatus.runId === runId &&
+    !currentStatus.lastRunCancelled &&
+    currentStatus.lastRunAt &&
+    Date.now() - currentStatus.lastRunAt < 2 * 60 * 60 * 1000
+  ) return
 
   const now = Date.now()
-  let remainingBudget = config.maxTotalPerRun
-
+  const duePlatforms: ExportablePlatform[] = []
   for (const platform of ALL_PLATFORMS) {
-    if (remainingBudget <= 0) break
     const platformConfig = config.platforms[platform]
     if (!platformConfig?.enabled) continue
 
@@ -444,30 +754,221 @@ async function checkAndRunScheduledExports(force = false): Promise<void> {
     const result = await chrome.storage.local.get(lastRunKey)
     const lastRun = (result[lastRunKey] as number) || 0
 
-    if (force || isDueForRun(platformConfig.frequency, lastRun, now)) {
-      const runResult = await runScheduledExportForPlatform(platform, config, remainingBudget)
-      remainingBudget -= runResult.processed
-      // Do not postpone the next automatic retry after a platform-level
-      // failure such as an expired login or a network outage.
-      if (runResult.succeeded) {
-        await chrome.storage.local.set({ [lastRunKey]: now })
-      }
+    if (force || isDueForSchedule(platformConfig, lastRun, now)) {
+      duePlatforms.push(platform)
     }
+  }
+
+  if (duePlatforms.length === 0) return
+  throwIfExportCancelled(signal)
+
+  const reporter = createScheduledStatusReporter({
+    runId,
+    lastRunAt: now,
+    isRunning: true,
+    lastRunExported: 0,
+    lastRunFailed: 0,
+    lastRunFailureBreakdown: {},
+    lastRunFallbackRecovered: 0,
+    lastRunRateLimitedPlatforms: [],
+    platformStatuses: currentStatus?.platformStatuses,
+    activePlatforms: [],
+    lastRunCancelled: false,
+    stopRequested: false,
+  })
+  await reporter.persist()
+
+  const budget = new ScheduledRunBudget(config.maxTotalPerRun)
+  try {
+    await runWithConcurrency(duePlatforms, config.maxConcurrentPlatforms, async (platform) => {
+      if (signal?.aborted) {
+        reporter.status.lastRunCancelled = true
+        return
+      }
+
+      reporter.markProviderActive(platform)
+      try {
+        const runResult = await runScheduledExportForPlatform(platform, config, budget, reporter, signal, runId)
+        // Do not postpone the next automatic retry after a platform-level
+        // failure, cancellation, expired login, or a network outage.
+        if (runResult.succeeded && !signal?.aborted) {
+          try {
+            await chrome.storage.local.set({ [`scheduledExport-lastRun-${platform}`]: now })
+          } catch {
+            // A checkpoint failure must not leave the visible task stuck in
+            // “running”. The dedup index still prevents duplicate files, and
+            // the next scan can retry the checkpoint safely.
+            reporter.status.lastRunError = 'The scheduled checkpoint could not be saved.'
+            void reporter.persist()
+          }
+        }
+      } finally {
+        reporter.markProviderInactive(platform)
+      }
+    })
+  } catch (error) {
+    if (isExportCancelledError(error) || signal?.aborted) {
+      reporter.status.lastRunCancelled = true
+    } else {
+      // This is a queue-level failure, not a provider response. Keep the
+      // diagnostic generic so status never stores conversation data.
+      reporter.status.lastRunError = 'The scheduled export queue stopped unexpectedly.'
+    }
+  } finally {
+    reporter.status.lastRunFinishedAt = Date.now()
+    reporter.status.isRunning = false
+    reporter.status.lastRunCancelled ||= Boolean(signal?.aborted)
+    reporter.status.stopRequested = false
+    await reporter.persist()
+    await reporter.flush()
   }
 }
 
 function startScheduledExport(force: boolean): boolean {
   if (scheduledRunPromise) return false
-  scheduledRunPromise = checkAndRunScheduledExports(force)
+  const controller = new AbortController()
+  const runId = createScheduledRunId()
+  scheduledRunController = controller
+  scheduledRunStopRequestedId = null
+  const removeStopWatcher = watchPersistedScheduledStop(runId, controller)
+  scheduledRunPromise = (async () => {
+    await beginPersistedScheduledRun(runId)
+    const stored = await chrome.storage.local.get(SCHEDULED_STOP_REQUEST_KEY)
+    if (readPersistedStopRequest(stored[SCHEDULED_STOP_REQUEST_KEY])?.runId === runId) {
+      scheduledRunStopRequestedId = runId
+      controller.abort()
+    }
+    await checkAndRunScheduledExports(force, controller.signal, runId)
+  })()
     .catch(error => {
       // Keep the service worker promise handled while retaining a diagnostic
       // that does not include conversation text or credentials.
       console.error('[Scheduled Export] Run failed:', error instanceof Error ? error.message : 'unknown error')
     })
-    .finally(() => {
+    .finally(async () => {
+      removeStopWatcher()
+      try {
+        await clearPersistedScheduledRun(runId)
+      } catch {
+        // The next run safely replaces an orphaned resource record.
+      }
+      if (scheduledRunController === controller) scheduledRunController = null
+      if (scheduledRunStopRequestedId === runId) scheduledRunStopRequestedId = null
       scheduledRunPromise = null
     })
   return true
+}
+
+type ScheduledConversationFetchResult = {
+  data?: Conversation | null
+  error?: string
+}
+
+export interface ScheduledConversationResolution {
+  conversation: Conversation | null
+  /** The initial API-detail problem, retained only as a safe aggregate category. */
+  directFailureReason?: 'rate_limited' | 'detail_unavailable' | 'detail_incomplete'
+  fallbackRecovered: boolean
+  /** Final failure category when neither direct detail nor page fallback is usable. */
+  failureReason?: ScheduledExportFailureReason
+}
+
+/**
+ * Scheduled runs begin with the fast provider API path, but must not discard a
+ * conversation merely because that response is incomplete. Interactive bulk
+ * export already has a page-level fallback; this keeps scheduled export on the
+ * same completeness contract without retaining chat text in diagnostics.
+ */
+export async function resolveScheduledConversation(
+  item: ConversationListItem,
+  fetchDetail: () => Promise<ScheduledConversationFetchResult>,
+  fetchFallback: (item: ConversationListItem) => Promise<ScheduledConversationFetchResult>,
+  signal?: AbortSignal
+): Promise<ScheduledConversationResolution> {
+  let directResult: ScheduledConversationFetchResult
+  try {
+    throwIfExportCancelled(signal)
+    directResult = await fetchDetail()
+    throwIfExportCancelled(signal)
+  } catch (error) {
+    if (isExportCancelledError(error)) throw error
+    directResult = { error: 'detail request failed' }
+  }
+
+  const directConversation = directResult.data ?? null
+  if (hasUsableConversation(directConversation, item.id)) {
+    return { conversation: directConversation, fallbackRecovered: false }
+  }
+
+  const directFailureReason = directConversation
+    ? 'detail_incomplete'
+    : isProviderRateLimitError(directResult.error)
+      ? 'rate_limited'
+      : 'detail_unavailable'
+
+  let fallbackResult: ScheduledConversationFetchResult
+  try {
+    throwIfExportCancelled(signal)
+    fallbackResult = await fetchFallback(item)
+    throwIfExportCancelled(signal)
+  } catch (error) {
+    if (isExportCancelledError(error)) throw error
+    fallbackResult = { error: 'page fallback failed' }
+  }
+
+  const fallbackConversation = fallbackResult.data ?? null
+  if (hasUsableConversation(fallbackConversation, item.id)) {
+    return {
+      conversation: fallbackConversation,
+      directFailureReason,
+      fallbackRecovered: true,
+    }
+  }
+
+  return {
+    conversation: null,
+    directFailureReason,
+    fallbackRecovered: false,
+    failureReason: directFailureReason === 'rate_limited'
+      ? 'rate_limited'
+      : fallbackConversation ? 'fallback_incomplete' : 'fallback_unavailable',
+  }
+}
+
+/** Keep last-run diagnostics useful without persisting titles, IDs, or chat text. */
+export function recordScheduledFailure(
+  status: ScheduledExportStatus,
+  reason: ScheduledExportFailureReason
+): void {
+  status.lastRunFailureBreakdown = {
+    ...status.lastRunFailureBreakdown,
+    [reason]: (status.lastRunFailureBreakdown?.[reason] ?? 0) + 1,
+  }
+}
+
+/**
+ * Keep a provider-level rate-limit signal separate from failed-file counts.
+ * A page fallback may still recover the current conversation, but the user
+ * should know why this platform intentionally stopped starting new API reads.
+ */
+export function recordScheduledRateLimit(
+  status: ScheduledExportStatus,
+  platform: ExportablePlatform
+): void {
+  const platforms = status.lastRunRateLimitedPlatforms ?? (status.lastRunRateLimitedPlatforms = [])
+  if (!platforms.includes(platform)) platforms.push(platform)
+}
+
+/**
+ * Keep browser download failures distinguishable from errors that happen while
+ * preparing the export. Browser error messages are intentionally not persisted:
+ * they can include URL or filename details that are not useful in the UI.
+ */
+export function classifyScheduledDownloadFailure(error: unknown): ScheduledExportFailureReason {
+  const message = error instanceof Error ? error.message : ''
+  if (message === 'Download completion timed out') return 'download_timed_out'
+  if (/^Download interrupted/.test(message)) return 'download_interrupted'
+  return 'download_request_failed'
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -475,30 +976,44 @@ function startScheduledExport(force: boolean): boolean {
 // ──────────────────────────────────────────────────────────────────
 
 /** Wait for a tab to finish loading */
-function waitForTabComplete(tabId: number, timeoutMs: number): Promise<void> {
+function waitForTabComplete(tabId: number, timeoutMs: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    let settled = false
+    const timer = setTimeout(() => finish(new Error('Tab load timeout')), timeoutMs)
+
+    const cleanup = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       chrome.tabs.onUpdated.removeListener(listener)
-      reject(new Error('Tab load timeout'))
-    }, timeoutMs)
+    }
+
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (error) reject(error)
+      else delay(3000, signal).then(resolve, reject)
+    }
+
+    const onAbort = () => finish(new Error('Export cancelled'))
 
     function listener(updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) {
       if (updatedTabId === tabId && changeInfo.status === 'complete') {
-        clearTimeout(timer)
-        chrome.tabs.onUpdated.removeListener(listener)
-        // Extra delay for SPA hydration
-        setTimeout(resolve, 3000)
+        finish()
       }
     }
 
     chrome.tabs.onUpdated.addListener(listener)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
 
     // Check if already loaded
     chrome.tabs.get(tabId).then(tab => {
       if (tab.status === 'complete') {
-        clearTimeout(timer)
-        chrome.tabs.onUpdated.removeListener(listener)
-        setTimeout(resolve, 3000)
+        finish()
       }
     }).catch(() => {
       // Tab might not exist yet — that's fine, the listener will catch it
@@ -510,17 +1025,19 @@ function waitForTabComplete(tabId: number, timeoutMs: number): Promise<void> {
 async function waitForContentScript(
   tabId: number,
   platform: ExportablePlatform,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<void> {
   const startTime = Date.now()
   while (Date.now() - startTime < timeoutMs) {
+    throwIfExportCancelled(signal)
     try {
       const response = await chrome.tabs.sendMessage(tabId, { type: 'DETECT_PLATFORM' })
       if (response?.data?.platform === platform) return
     } catch {
       // Content script not ready yet
     }
-    await delay(1000)
+    await delay(1000, signal)
   }
   throw new Error(`Content script not ready on ${platform} after ${timeoutMs}ms`)
 }
@@ -535,6 +1052,18 @@ async function getExportedIds(platform: ExportablePlatform): Promise<Set<string>
   const result = await chrome.storage.local.get(key)
   const ids: string[] = result[key] || []
   return new Set(ids)
+}
+
+/** Expose only opaque IDs so the bulk UI can avoid re-downloading its archive. */
+async function handleGetExportedConversationIds(
+  platform: ExportablePlatform
+): Promise<{ data?: string[]; error?: string }> {
+  if (!ALL_PLATFORMS.includes(platform)) return { error: 'Unsupported platform' }
+  try {
+    return { data: [...await getExportedIds(platform)] }
+  } catch {
+    return { error: 'Could not read export history' }
+  }
 }
 
 let exportHistoryQueue: Promise<void> = Promise.resolve()
@@ -572,7 +1101,7 @@ async function markAsExported(record: ExportedConversationRecord): Promise<void>
 }
 
 /** Clear all exported history for a platform (or all platforms) */
-async function clearExportedHistory(platform?: ExportablePlatform): Promise<void> {
+export async function clearExportedHistory(platform?: ExportablePlatform): Promise<void> {
   const platforms = platform
     ? [platform]
     : ALL_PLATFORMS
@@ -581,6 +1110,18 @@ async function clearExportedHistory(platform?: ExportablePlatform): Promise<void
     const recordPrefix = `exportedRecord-${p}-`
     const recordKeys = Object.keys(stored).filter(key => key.startsWith(recordPrefix))
     await chrome.storage.local.remove([`exportedIds-${p}`, ...recordKeys])
+  }
+
+  // The options-page action is global. Clear its visible last-run diagnostics
+  // as well, otherwise a successful clear still looks like the previous failed
+  // run and the next automatic check remains artificially delayed.
+  if (!platform) {
+    await chrome.storage.local.remove([
+      'scheduledExportStatus',
+      SCHEDULED_ACTIVE_RUN_KEY,
+      SCHEDULED_STOP_REQUEST_KEY,
+      ...ALL_PLATFORMS.map(p => `scheduledExport-lastRun-${p}`),
+    ])
   }
 }
 
@@ -594,28 +1135,38 @@ async function clearExportedHistory(platform?: ExportablePlatform): Promise<void
 interface ScheduledExportRunResult {
   processed: number
   succeeded: boolean
+  cancelled?: boolean
+  /** A provider told us to slow down; queued items remain eligible for retry. */
+  rateLimited?: boolean
 }
 
 async function runScheduledExportForPlatform(
   platform: ExportablePlatform,
   config: ScheduledExportSettings,
-  remainingBudget: number
+  budget: ScheduledRunBudget,
+  reporter: ScheduledStatusReporter,
+  signal?: AbortSignal,
+  runId?: string
 ): Promise<ScheduledExportRunResult> {
-  // Update status: starting
-  const status: ScheduledExportStatus = {
-    lastRunAt: Date.now(),
-    isRunning: true,
-    currentPlatform: platform,
-    lastRunExported: 0,
-    lastRunFailed: 0,
-  }
-  await chrome.storage.local.set({ scheduledExportStatus: status })
-
   let tabId: number | null = null
   let exported = 0
   let failed = 0
+  const status = reporter.status
+  let authenticationFailureRecorded = false
+
+  const recordFailure = (reason: ScheduledExportFailureReason) => {
+    failed += 1
+    status.lastRunFailed += 1
+    recordScheduledFailure(status, reason)
+    void reporter.persist()
+  }
 
   try {
+    throwIfExportCancelled(signal)
+    // Keep scheduled output subject to the user's global export preferences.
+    // If storage is unavailable, this resolves to the documented defaults.
+    const settings = await getResolvedExtensionSettings()
+
     // 1. Open a tab to the platform
     const tab = await chrome.tabs.create({
       url: PLATFORM_URLS[platform],
@@ -624,21 +1175,52 @@ async function runScheduledExportForPlatform(
     tabId = tab.id ?? null
 
     if (!tabId) throw new Error('Failed to create tab')
+    await registerScheduledRunTab(runId, tabId)
+    throwIfExportCancelled(signal)
 
     // 2. Wait for the tab to finish loading
-    await waitForTabComplete(tabId, 30000) // 30s timeout
+    await waitForTabComplete(tabId, 30000, signal) // 30s timeout
 
     // 3. Wait for content script to be ready
-    await waitForContentScript(tabId, platform, 10000)
+    await waitForContentScript(tabId, platform, 10000, signal)
+
+    // A provider may redirect an inactive tab to its sign-in page while the
+    // extension is waiting for the content script. Record that state without
+    // retaining the URL or any page text.
+    const loadedTab = await chrome.tabs.get(tabId).catch(() => undefined)
+    if (isLikelyProviderLoginUrl(platform, loadedTab?.url)) {
+      reporter.markPlatformStatus(platform, 'auth_required')
+      recordFailure('authentication_required')
+      authenticationFailureRecorded = true
+      return { processed: 1, succeeded: false }
+    }
 
     // 4. Fetch conversation list
+    throwIfExportCancelled(signal)
     const listResponse = await chrome.tabs.sendMessage(tabId, {
       type: 'FETCH_ALL_CONVERSATIONS',
     })
+    throwIfExportCancelled(signal)
+
+    if (isProviderRateLimitError(listResponse?.error)) {
+      reporter.markPlatformStatus(platform, 'rate_limited')
+      recordScheduledRateLimit(status, platform)
+      recordFailure('rate_limited')
+      return { processed: 1, succeeded: false, rateLimited: true }
+    }
+
+    if (listResponse?.meta?.authRequired || isAuthenticationRequiredError(listResponse?.error)) {
+      reporter.markPlatformStatus(platform, 'auth_required')
+      recordFailure('authentication_required')
+      authenticationFailureRecorded = true
+      return { processed: 1, succeeded: false }
+    }
 
     if (!listResponse?.data) {
       throw new Error(`Failed to fetch conversations from ${platform}`)
     }
+
+    reporter.markPlatformStatus(platform, 'ready')
 
     const allConversations: ConversationListItem[] = listResponse.data
 
@@ -648,97 +1230,186 @@ async function runScheduledExportForPlatform(
 
     // 6. Limit to max per run
     const platformConfig = config.platforms[platform]
-    const toExport = newConversations.slice(0, Math.min(platformConfig.maxPerRun, remainingBudget))
+    const toExport = newConversations.slice(0, platformConfig.maxPerRun)
 
-    // 7. Export each conversation
-    for (const convItem of toExport) {
+    // 7. Resolve conversation details with a user-selected per-provider
+    // overlap cap. Starts remain paced, so raising concurrency improves
+    // throughput for slow calls without firing an immediate request burst.
+    // Markdown/download work is local and therefore runs through a separate
+    // limiter; it never blocks the next eligible provider read.
+    const requestPacer = new ScheduledRequestPacer(config.requestDelayMs)
+    const outputGate = new ScheduledConcurrencyGate(platformConfig.maxConcurrentConversations)
+    const outputTasks: Promise<void>[] = []
+    let rateLimited = false
+
+    const exportResolvedConversation = async (
+      convItem: ConversationListItem,
+      conversation: Conversation
+    ): Promise<void> => {
+      let prepared: { markdown: string; filename: string }
       try {
-        // Check total limit
-        if (exported + failed >= remainingBudget) break
-
-        // Fetch full conversation detail
-        const detailResponse = await chrome.tabs.sendMessage(tabId, {
-          type: 'FETCH_CONVERSATION_DETAIL',
-          data: { id: convItem.id, title: convItem.title },
-        })
-
-        const conversation: Conversation | null = detailResponse?.data || null
-        if (!hasUsableConversation(conversation, convItem.id)) {
-          failed++
-          continue
-        }
-
-        // Rate limiting delay between requests
-        await delay(config.requestDelayMs)
-
-        // Export using the configured scheduled format.
+        // Scheduled PDF export is deliberately unsupported: the MV3 worker
+        // cannot render a document safely in the background.
         const exportFormat = platformConfig.format || config.defaultFormat
         if (exportFormat !== 'markdown') {
           throw new Error('Scheduled PDF export is not available in the background worker')
         }
-        const exportOptions: ExportOptions = {
-          format: exportFormat,
-          includeMetadata: true,
-          includeCodeBlocks: true,
-          includeImages: true,
-        }
-
+        const exportOptions = buildScheduledExportOptions(exportFormat, settings)
         const markdown = conversationToMarkdown(conversation, exportOptions)
-        const baseFilename = generateFilename(
-          '{date}-{platform}-{title}',
-          conversation
-        )
+        const baseFilename = generateFilename(settings.filenamePattern, conversation)
         const filename = buildDownloadFilename(
           baseFilename,
           platform,
           '.md',
-          'by-platform', // organized by platform folder
-          ''
+          settings.downloadFolder,
+          settings.customFolderName
         )
+        prepared = { markdown, filename }
+      } catch {
+        console.error('[Scheduled Export] Could not prepare Markdown output')
+        recordFailure('serialization_failed')
+        return
+      }
 
-        // Download and wait for browser completion before writing history.
-        const url = textToDataUrl(markdown, 'text/markdown')
-        await downloadAndWait({ url, filename, saveAs: false })
+      let downloadId: number | null = null
+      try {
+        // Build a service-worker-safe URL and wait for Chrome to report that
+        // the file actually completed before recording it in history.
+        const url = textToDataUrl(prepared.markdown, 'text/markdown')
+        try {
+          await downloadAndWait(
+            { url, filename: prepared.filename, saveAs: false },
+            60_000,
+            chrome.downloads,
+            {
+              signal,
+              onStarted: async (id) => {
+                downloadId = id
+                await registerScheduledRunDownload(runId, id)
+              },
+            }
+          )
+        } finally {
+          if (downloadId !== null && runId) {
+            await releaseScheduledRunResource(runId, 'downloadIds', downloadId)
+          }
+        }
+      } catch (error) {
+        if (isExportCancelledError(error)) throw error
+        console.error('[Scheduled Export] Browser download did not complete')
+        recordFailure(classifyScheduledDownloadFailure(error))
+        return
+      }
 
-        // Track exported conversation
+      try {
+        // Track an item only after a completed download. This keeps a failed
+        // item eligible for the next run.
+        throwIfExportCancelled(signal)
         await markAsExported({
           id: convItem.id,
           platform,
           title: convItem.title,
           exportedAt: Date.now(),
-          filename,
+          filename: prepared.filename,
         })
-
-        exported++
-      } catch (err) {
-        console.error(`[Scheduled Export] Failed to export ${convItem.id}:`, err)
-        failed++
+      } catch (error) {
+        if (isExportCancelledError(error)) throw error
+        console.error('[Scheduled Export] Could not save export history')
+        recordFailure('history_write_failed')
+        return
       }
+
+      exported += 1
+      status.lastRunExported += 1
+      void reporter.persist()
     }
 
-    // 8. Update status
-    status.lastRunFinishedAt = Date.now()
-    status.isRunning = false
-    status.lastRunExported = exported
-    status.lastRunFailed = failed
-    await chrome.storage.local.set({ scheduledExportStatus: status })
+    await runWithConcurrency(
+      toExport,
+      platformConfig.maxConcurrentConversations,
+      async (convItem) => {
+        if (rateLimited) return
+        await requestPacer.waitForTurn(signal)
+        // An earlier concurrent request may have reported a limit while this
+        // worker waited for its paced turn. Do not add more provider traffic.
+        if (rateLimited) return
+        throwIfExportCancelled(signal)
+        // A shared claim counts a request only when it is about to start,
+        // preserving the total-run ceiling across parallel providers.
+        if (!budget.tryClaim()) return
+
+        const resolution = await resolveScheduledConversation(
+          convItem,
+          async () => {
+            const response = await chrome.tabs.sendMessage(tabId!, {
+              type: 'FETCH_CONVERSATION_DETAIL',
+              data: { id: convItem.id, title: convItem.title },
+            })
+            return response as ScheduledConversationFetchResult
+          },
+          item => handleFetchConversationDetailInBackgroundTab(item, signal, runId),
+          signal,
+        )
+
+        if (resolution.directFailureReason === 'rate_limited') {
+          rateLimited = true
+          reporter.markPlatformStatus(platform, 'rate_limited')
+          recordScheduledRateLimit(status, platform)
+          void reporter.persist()
+        }
+
+        if (!resolution.conversation) {
+          recordFailure(resolution.failureReason ?? 'detail_unavailable')
+          return
+        }
+
+        if (resolution.fallbackRecovered) {
+          status.lastRunFallbackRecovered = (status.lastRunFallbackRecovered ?? 0) + 1
+          void reporter.persist()
+        }
+
+        const outputTask = outputGate.run(() => exportResolvedConversation(convItem, resolution.conversation!))
+        outputTasks.push(outputTask)
+        // A stop can abort a queued browser download before the aggregate
+        // await below. Observe it immediately to prevent an unhandled worker
+        // rejection while still allowing the outer queue to return the reason.
+        void outputTask.catch(() => undefined)
+      }
+    )
+
+    await Promise.all(outputTasks)
+
     return {
       processed: exported + failed,
-      succeeded: shouldAdvanceScheduledLastRun({
+      // Do not advance the provider checkpoint after a rate limit: any queue
+      // rows we intentionally left untouched must remain eligible next run.
+      succeeded: !rateLimited && shouldAdvanceScheduledLastRun({
         attempted: exported + failed,
         exported,
         failed,
-        skipped: Math.max(0, newConversations.length - toExport.length),
+        skipped: Math.max(0, newConversations.length - (exported + failed)),
         listComplete: true,
       }),
+      rateLimited,
     }
 
   } catch (err) {
+    if (isExportCancelledError(err)) {
+      status.lastRunCancelled = true
+      void reporter.persist()
+      return { processed: exported + failed, succeeded: false, cancelled: true }
+    }
     console.error(`[Scheduled Export] Platform ${platform} failed:`, err)
-    status.lastRunFinishedAt = Date.now()
-    status.isRunning = false
-    status.lastRunError = (err as Error).message
-    await chrome.storage.local.set({ scheduledExportStatus: status })
+    const authRequired = isAuthenticationRequiredError(err)
+    reporter.markPlatformStatus(platform, authRequired ? 'auth_required' : 'error')
+    if (authRequired && !authenticationFailureRecorded) {
+      recordFailure('authentication_required')
+      authenticationFailureRecorded = true
+    }
+    // Do not persist raw provider errors: they can include a URL or a
+    // conversation title. The aggregate failures remain visible in the UI.
+    status.lastRunError = 'A scheduled provider could not be prepared.'
+    void reporter.persist()
     return { processed: exported + failed, succeeded: false }
   } finally {
     // 9. Close the tab
@@ -747,6 +1418,13 @@ async function runScheduledExportForPlatform(
         await chrome.tabs.remove(tabId)
       } catch {
         // Tab might already be closed
+      }
+    }
+    if (tabId && runId) {
+      try {
+        await releaseScheduledRunResource(runId, 'tabIds', tabId)
+      } catch {
+        // Resource bookkeeping must never leave the platform cleanup hanging.
       }
     }
   }

@@ -1,22 +1,27 @@
 import React from 'react'
+import { InfoTooltip } from './InfoTooltip'
 
 interface SectionProps {
   title: string
+  hint?: string
   children: React.ReactNode
   className?: string
 }
 
-export function Section({ title, children, className = '' }: SectionProps) {
+/**
+ * A labelled group of related controls, separated by a hairline rule.
+ * An optional `hint` hides secondary explanation behind an ⓘ tooltip.
+ */
+export function Section({ title, hint, children, className = '' }: SectionProps) {
   return (
-    <div className={`flex-col gap-2 ${className}`}>
-      <h3 className="section-label uppercase tracking-wider text-xs font-bold text-muted border-b border-light pb-1 mb-1">
+    <div className={`section ${className}`}>
+      <h3 className="section-label">
         {title}
+        {hint && <InfoTooltip text={hint} />}
       </h3>
-      <div className="flex-col gap-1">
+      <div className="section-body">
         {children}
       </div>
     </div>
   )
 }
-
-export default Section

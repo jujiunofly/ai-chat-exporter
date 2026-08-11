@@ -57,21 +57,64 @@ describe('Options page layout isolation', () => {
     expect(hookSource).toContain("setProperty('overflow', 'visible', 'important')")
   })
 
-  it('keeps appearance and storage controls visible in the first settings card', () => {
+  it('keeps appearance, storage, and the DIY filename control in the first settings card', () => {
     const source = readSource('src/options.tsx')
 
     const generalCardIndex = source.indexOf('general-card')
     const contentCardIndex = source.indexOf('content-card')
-    const filenameCardIndex = source.indexOf('filename-card')
+    const filenamePanelIndex = source.indexOf('filename-settings-panel')
     const themeIndex = source.indexOf("T('UI Theme')")
     const storageIndex = source.indexOf("T('Download Folder Strategy')")
 
     expect(generalCardIndex).toBeGreaterThanOrEqual(0)
     expect(contentCardIndex).toBeGreaterThan(generalCardIndex)
-    expect(filenameCardIndex).toBeGreaterThan(contentCardIndex)
+    expect(filenamePanelIndex).toBeGreaterThan(generalCardIndex)
+    expect(filenamePanelIndex).toBeLessThan(contentCardIndex)
     expect(themeIndex).toBeGreaterThan(generalCardIndex)
     expect(themeIndex).toBeLessThan(contentCardIndex)
     expect(storageIndex).toBeGreaterThan(generalCardIndex)
     expect(storageIndex).toBeLessThan(contentCardIndex)
+  })
+
+  it('uses the same control treatment for schedule frequency, time, day, and limits', () => {
+    const source = readSource('src/options.tsx')
+    const css = readSource('src/styles/options.css')
+
+    expect(source).toContain('input select schedule-control')
+    expect(source).toContain('schedule-time-control')
+    expect(source).toContain('schedule-number-control')
+    expect(css).toContain('.platform-field .schedule-control')
+    expect(css).toContain('grid-template-columns: repeat(auto-fit, minmax(132px, 1fr))')
+    expect(css).toContain('min-height: 38px')
+  })
+
+  it('keeps scheduled export collapsed by default and exposes an accessible toggle', () => {
+    const source = readSource('src/options.tsx')
+    const css = readSource('src/styles/options.css')
+
+    expect(source).toContain('const [scheduleExpanded, setScheduleExpanded] = useState(false)')
+    expect(source).toContain('aria-controls="scheduled-export-details"')
+    expect(source).toContain('aria-expanded={scheduleExpanded}')
+    expect(source).toContain('id="scheduled-export-details"')
+    expect(css).toContain('.schedule-collapse-button:focus-visible')
+  })
+
+  it('shows per-platform next-run and authentication status metadata', () => {
+    const source = readSource('src/options.tsx')
+
+    expect(source).toContain('scheduledExport-lastRun-${platform}')
+    expect(source).toContain('getNextScheduledRunAt')
+    expect(source).toContain('platformStatuses')
+    expect(source).toContain('platformNextRun <= Date.now()')
+  })
+
+  it('puts the editable background-check interval in the schedule rail', () => {
+    const source = readSource('src/options.tsx')
+    const css = readSource('src/styles/options.css')
+
+    expect(source).toContain('applyGlobalScheduledInterval(scheduleSettings, e.target.value)')
+    expect(source).toContain('className="schedule-rail-interval-control"')
+    expect(source).toContain('MIN_SCHEDULE_CHECK_INTERVAL_MINUTES')
+    expect(css).toContain('.schedule-rail-interval-control input')
   })
 })

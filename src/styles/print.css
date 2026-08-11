@@ -1,5 +1,7 @@
 /**
- * Print & Preview Styles — Gemini-inspired design system
+ * Print & Preview Styles — AI Chat Exporter “Archive Desk” preview document
+ * Full-page preview layout and print rules; colors come from the shared
+ * popup.css token system (light/dark via CSS custom properties).
  */
 
 html {
@@ -8,7 +10,6 @@ html {
   overflow-x: hidden;
   overflow-y: auto;
 }
-
 /* Override popup.css body width for full-page preview */
 body {
   width: auto !important;
@@ -46,9 +47,41 @@ body {
 }
 
 .preview-header {
-  background: var(--bg-secondary);
-  padding: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24px 32px;
   border-bottom: 1px solid var(--border-light);
+  background: var(--bg-primary);
+}
+
+.preview-header-title {
+  flex: 1;
+  min-width: 0;
+  padding-right: 20px;
+}
+
+.preview-header-title h1 {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.preview-header-platform {
+  font-weight: 600;
 }
 
 .preview-body {
@@ -58,41 +91,120 @@ body {
   gap: 24px;
 }
 
-.preview-message-list {
+/* Loading / error status states */
+.preview-status {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
 }
 
-/* ===== Chat Bubbles ===== */
-.chat-bubble {
-  max-width: min(78%, 680px);
+.preview-status .spinner {
+  width: 24px;
+  height: 24px;
+  border-top-color: var(--primary);
+}
+
+.preview-status-text {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.preview-status-text.error {
+  color: var(--error);
+}
+
+/* ===== Mode tab bar ===== */
+.preview-tab-bar {
+  padding: 16px 32px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-tertiary);
+}
+
+.preview-tab-bar .tabs {
+  display: inline-flex;
+}
+
+.preview-tab-bar .tab {
+  flex: none;
+  padding: 8px 24px;
+}
+
+/* ===== Raw Markdown panel ===== */
+.markdown-panel {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
   padding: 16px;
-  border-radius: var(--radius-lg);
+  overflow: auto;
+  max-height: 60vh;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
+.preview-integrity-warning {
+  margin-bottom: 16px;
+}
+
+.preview-message-list {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* ===== Document-style conversation ===== */
+.chat-bubble {
+  width: 100%;
+  max-width: 720px;
+  align-self: stretch;
+  padding: 18px 0 22px;
+  margin: 0 auto;
+  border: 0;
+  border-bottom: 1px solid var(--border-light);
+  border-radius: 0;
+  background: transparent !important;
+  color: var(--text-primary);
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
-.chat-bubble.user {
-  align-self: flex-end;
-  background-color: var(--msg-user-bg);
-  color: var(--msg-user-text);
-  border-bottom-right-radius: 4px;
+.chat-bubble:first-child {
+  padding-top: 4px;
 }
 
-.chat-bubble.ai {
-  align-self: flex-start;
-  background-color: var(--msg-ai-bg);
-  color: var(--msg-ai-text);
-  border-bottom-left-radius: 4px;
+.chat-bubble .message-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 7px;
+  line-height: 1.3;
+  margin-bottom: 11px;
+  text-align: center;
+}
+
+.chat-bubble .role-label {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: normal;
+  margin: 0;
+  text-transform: none;
 }
 
 .chat-bubble pre {
-  background: var(--code-bg);
-  color: var(--code-text);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
   padding: 12px;
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   overflow-x: auto;
   margin-top: 8px;
   font-family: monospace;
@@ -107,11 +219,20 @@ body {
   border-radius: 3px;
 }
 
-.chat-bubble .role-label {
-  font-weight: 600;
-  font-size: 13px;
-  opacity: 0.7;
-  margin-bottom: 8px;
+.chat-bubble .timestamp {
+  display: inline;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-bubble .meta-separator {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1;
 }
 
 /* Rich Markdown content in the rendered preview. */
@@ -140,6 +261,7 @@ body {
   padding-left: 12px;
   border-left: 3px solid var(--border-medium);
   color: var(--text-secondary);
+  background: transparent;
 }
 
 .chat-bubble .message-content table {
@@ -153,6 +275,110 @@ body {
   border: 1px solid var(--border-light);
   padding: 6px 8px;
   text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.chat-bubble .message-content table {
+  table-layout: fixed;
+}
+
+.chat-bubble .latex {
+  max-width: 680px;
+  margin: 14px auto;
+  overflow-x: auto;
+  color: var(--text-primary);
+  font-family: 'Times New Roman', 'STIX Two Math', 'Cambria Math', serif;
+  line-height: 1.35;
+}
+
+.chat-bubble .latex-display {
+  margin: 20px auto;
+  text-align: center;
+}
+
+.chat-bubble .latex math {
+  font-size: 1.08em;
+}
+
+.chat-bubble img {
+  max-width: 100%;
+  max-height: 720px;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+}
+
+.chat-bubble .image {
+  width: 100%;
+  max-width: 680px;
+  margin: 18px auto 22px;
+  text-align: center;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.chat-bubble .markdown-image {
+  max-width: 100%;
+  max-height: 720px;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  margin: 18px auto 22px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+}
+
+/* The legacy card treatment is explicit, never the default. */
+.preview-container.pdf-style-classic .chat-bubble {
+  max-width: min(78%, 680px);
+  padding: 16px;
+  border-bottom: 0;
+  border-radius: var(--radius-lg);
+  white-space: pre-wrap;
+}
+
+.preview-container.pdf-style-classic .chat-bubble.user {
+  align-self: flex-end;
+  background-color: var(--msg-user-bg) !important;
+  color: var(--msg-user-text);
+  border-bottom-right-radius: 4px;
+}
+
+.preview-container.pdf-style-classic .chat-bubble.ai {
+  align-self: flex-start;
+  background-color: var(--msg-ai-bg) !important;
+  color: var(--msg-ai-text);
+  border-bottom-left-radius: 4px;
+}
+
+.preview-container.pdf-style-classic .chat-bubble .role-label {
+  font-size: 13px;
+  letter-spacing: normal;
+  margin: 0;
+  text-align: left;
+  text-transform: none;
+}
+
+.preview-container.pdf-style-classic .chat-bubble .message-meta {
+  justify-content: flex-start;
+  margin-bottom: 8px;
+  text-align: left;
+}
+
+.preview-container.pdf-style-classic .chat-bubble img {
+  margin: 0;
+  border: 0;
+  border-radius: 8px;
+}
+
+.preview-container.pdf-style-classic .chat-bubble .markdown-image {
+  margin: 8px 0;
+  border: 0;
+  border-radius: 8px;
 }
 
 .preview-artifacts {
@@ -169,7 +395,16 @@ body {
 /* ===== Download Buttons ===== */
 .preview-actions {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.btn-header {
+  width: auto;
+  height: 36px;
+  padding: 0 16px;
+  gap: 6px;
 }
 
 @media (max-width: 760px) {
@@ -192,7 +427,9 @@ body {
   }
 }
 
-/* ===== Print Media Query ===== */
+/* ===== Print Media Query =====
+ * Print output stays light and hardcoded on purpose: ink-on-paper rendering
+ * must not follow the screen's dark theme tokens. */
 @page {
   margin: 1in;
   size: A4;
@@ -203,8 +440,8 @@ body {
     background: white;
   }
   
-  .dev-nav, .preview-actions, .no-print, button, nav,
-  header:not(.print-header), footer:not(.print-footer) {
+  .preview-actions, button, nav,
+  header, footer {
     display: none !important;
   }
   
@@ -257,12 +494,22 @@ body {
     border-collapse: collapse;
     width: 100%;
     margin: 12px 0;
+    table-layout: fixed;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 
   th, td {
     border: 1px solid #ddd;
     padding: 8px;
     text-align: left;
+    vertical-align: top;
+    overflow-wrap: anywhere;
   }
 
   th {
@@ -272,7 +519,9 @@ body {
 
   img {
     max-width: 100%;
+    max-height: 640px;
     height: auto;
+    object-fit: contain;
   }
 
   ul, ol {
@@ -301,32 +550,4 @@ body {
   p {
     margin: 12px 0;
   }
-}
-
-/* ===== Print Header/Footer ===== */
-.print-header {
-  text-align: center;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 2px solid var(--border-light);
-}
-
-.print-header h1 {
-  font-size: 24pt;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-
-.print-header .metadata {
-  font-size: 10pt;
-  color: var(--text-secondary);
-}
-
-.print-footer {
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-light);
-  text-align: center;
-  font-size: 10pt;
-  color: var(--text-secondary);
 }

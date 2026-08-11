@@ -3,6 +3,10 @@
  */
 
 import type { Conversation, ExportOptions, ChatMessage, CodeBlock, Attachment } from './types'
+import { stripProviderArtifacts } from './dom-utils'
+import { sanitizeFilename } from './filename'
+import { embedInlineImageAttachments, isInlineImageAttachment, removeInlineMarkdownImages } from './inline-media'
+import { localeTag, t, type Locale } from './i18n'
 
 /** Platform display name lookup */
 const platformLabels: Record<string, string> = { chatgpt: 'ChatGPT', gemini: 'Google Gemini', claude: 'Claude', deepseek: 'DeepSeek', grok: 'Grok' }
@@ -18,16 +22,17 @@ export function conversationToMarkdown(
   options: ExportOptions
 ): string {
   const lines: string[] = []
+  const locale = options.locale ?? 'en'
   
   // Add header with metadata if enabled
   if (options.includeMetadata) {
-    lines.push(...generateMetadataHeader(conversation))
+    lines.push(...generateMetadataHeader(conversation, locale))
     lines.push('')
   }
   
   // Process each message
   conversation.messages.forEach((message, index) => {
-    lines.push(...formatMessage(message, options, index))
+    lines.push(...formatMessage(message, conversation, options, index))
     lines.push('')
   })
 
@@ -39,9 +44,9 @@ export function conversationToMarkdown(
     const artifactRefs = collectArtifactReferences(conversation, options)
     const inlineArtifacts = collectInlineArtifacts(conversation, options)
     if (artifactRefs.length > 0 || inlineArtifacts.length > 0) {
-      lines.push('## Artifacts')
+      lines.push(`## ${t('Artifacts', locale)}`)
       lines.push('')
-      lines.push('_AI-generated artifacts and research documents referenced in this conversation:_')
+      lines.push(`_${t('AI-generated artifacts and research documents referenced in this conversation:', locale)}_`)
       lines.push('')
       artifactRefs.forEach(ref => {
         // Escape markdown link syntax so a crafted title/url cannot inject
@@ -52,13 +57,13 @@ export function conversationToMarkdown(
       })
       for (const artifact of inlineArtifacts) {
         lines.push('')
-        lines.push(`### ${escapeMarkdownLinkText(artifact.title || 'Artifact').replace(/[\r\n]+/g, ' ')}`)
+        lines.push(`### ${escapeMarkdownLinkText(artifact.title || t('Artifact', locale)).replace(/[\r\n]+/g, ' ')}`)
         lines.push('')
-        lines.push(`- **Type:** ${artifact.type}`)
-        if (artifact.language) lines.push(`- **Language:** ${escapeMarkdownLinkText(artifact.language)}`)
-        if (artifact.mimeType) lines.push(`- **MIME type:** ${escapeMarkdownLinkText(artifact.mimeType)}`)
+        lines.push(`- **${t('Type', locale)}:** ${escapeMarkdownLinkText(artifact.type)}`)
+        if (artifact.language) lines.push(`- **${t('Language', locale)}:** ${escapeMarkdownLinkText(artifact.language)}`)
+        if (artifact.mimeType) lines.push(`- **${t('MIME type', locale)}:** ${escapeMarkdownLinkText(artifact.mimeType)}`)
         if (artifact.url && sanitizeUrl(artifact.url)) {
-          lines.push(`- **Open:** [${escapeMarkdownLinkText(artifact.url)}](${sanitizeUrl(artifact.url)})`)
+          lines.push(`- **${t('Open', locale)}:** [${escapeMarkdownLinkText(artifact.url)}](${sanitizeUrl(artifact.url)})`)
         }
         if (artifact.content) {
           const fence = markdownFence(artifact.content)
@@ -75,7 +80,12 @@ export function conversationToMarkdown(
   
   // Add footer
   lines.push('---')
-  lines.push(`*Exported from ${platformLabels[conversation.platform] || conversation.platform} on ${new Date().toLocaleDateString()}*`)
+  lines.push(`*${t(
+    'Exported from {0} on {1}',
+    locale,
+    platformLabels[conversation.platform] || conversation.platform,
+    new Date().toLocaleDateString(localeTag(locale))
+  )}*`)
   lines.push('')
   
   return lines.join('\n')
@@ -86,22 +96,25 @@ export function conversationToMarkdown(
  * @param conversation - The conversation
  * @returns Array of header lines
  */
-function generateMetadataHeader(conversation: Conversation): string[] {
+function generateMetadataHeader(conversation: Conversation, locale: Locale): string[] {
   const lines: string[] = []
   
-  lines.push(`# ${conversation.title || 'Untitled Conversation'}`)
+  lines.push(`# ${stripProviderArtifacts(conversation.title || t('Untitled Conversation', locale))}`)
   lines.push('')
   
   // Add metadata section
-  lines.push('## Metadata')
+  lines.push(`## ${t('Metadata', locale)}`)
   lines.push('')
-  lines.push(`- **Platform:** ${platformLabels[conversation.platform] || conversation.platform}`)
-  lines.push(`- **URL:** ${conversation.url}`)
-  lines.push(`- **Messages:** ${conversation.messages.length}`)
+  lines.push(`- **${t('Platform', locale)}:** ${platformLabels[conversation.platform] || conversation.platform}`)
+  if (conversation.modelName) {
+    lines.push(`- **${t('Model', locale)}:** ${conversation.modelName}`)
+  }
+  lines.push(`- **${t('URL', locale)}:** ${conversation.url}`)
+  lines.push(`- **${t('Messages', locale)}:** ${conversation.messages.length}`)
   
   if (conversation.createdAt) {
     const date = new Date(conversation.createdAt)
-    lines.push(`- **Created:** ${date.toLocaleString()}`)
+    lines.push(`- **${t('Created', locale)}:** ${date.toLocaleString(localeTag(locale))}`)
   }
   
   lines.push('')
@@ -117,32 +130,46 @@ function generateMetadataHeader(conversation: Conversation): string[] {
  */
 function formatMessage(
   message: ChatMessage,
+  conversation: Conversation,
   options: ExportOptions,
   index: number
 ): string[] {
   const lines: string[] = []
   
   // Add role header
-  const roleLabel = formatRoleLabel(message.role)
+  const roleLabel = formatRoleLabel(message.role, conversation, options)
   const authorInfo = message.authorName ? ` (${message.authorName})` : ''
   lines.push(`### ${roleLabel}${authorInfo}`)
   lines.push('')
   
   // Add timestamp if available
-  if (message.timestamp && options.includeMetadata) {
-    const time = new Date(message.timestamp).toLocaleTimeString()
-    lines.push(`*${time}*`)
-    lines.push('')
+  if (message.timestamp && options.includeMetadata && options.showMessageTimestamps !== false) {
+    const date = new Date(message.timestamp)
+    if (!Number.isNaN(date.getTime())) {
+      lines.push(`*${date.toLocaleString(localeTag(options.locale))}*`)
+      lines.push('')
+    }
   }
   
-  // Add main content
-  if (message.content) {
-    lines.push(...formatContent(message.content))
+  const attachments = (message.attachments || []).filter(attachment =>
+    shouldIncludeAttachment(attachment, options)
+  )
+  const inlineImages = embedInlineImageAttachments(message.content, attachments)
+
+  // Add main content. Provider image handles are converted before generic
+  // artifact stripping, so the Markdown transcript keeps images in turn order.
+  const exportContent = stripProviderArtifacts(
+    options.includeImages === false
+      ? removeInlineMarkdownImages(inlineImages.content)
+      : inlineImages.content
+  )
+  if (exportContent) {
+    lines.push(...formatContent(exportContent))
   }
   
   // Add code blocks if enabled (avoid duplicates with content)
   if (options.includeCodeBlocks && message.codeBlocks?.length) {
-    const contentLower = message.content?.toLowerCase() || ''
+    const contentLower = exportContent.toLowerCase()
     const newBlocks = message.codeBlocks.filter(block => {
       const blockCode = block.code.trim().toLowerCase()
       return blockCode.length > 10 && !contentLower.includes(blockCode.slice(0, 50))
@@ -157,23 +184,19 @@ function formatMessage(
   }
   
   // Add images if enabled
-  if (message.attachments?.length) {
+  if (attachments.length) {
     // When includeUploadedFiles is OFF, drop references to FILES the user
     // uploaded into the chat — but NEVER strip genuine images, which are
     // conversational content (fixes the previous bug where every image was
     // removed when the toggle was off). Images are only excluded if they are
     // explicitly flagged as `uploaded` AND typed as an image by the parser.
-    const uploadedFilter = (a: Attachment) =>
-      options.includeUploadedFiles === false && a.uploaded === true && a.type !== 'image'
-        ? false
-        : true
-    const attachments = message.attachments.filter(uploadedFilter)
-
-    const images = options.includeImages ? attachments.filter(a => a.type === 'image') : []
+    const images = options.includeImages
+      ? attachments.filter(attachment => attachment.type === 'image' && !isInlineImageAttachment(attachment, inlineImages.usedImageUrls))
+      : []
     if (images.length > 0) {
       lines.push('')
       images.forEach(img => {
-        lines.push(`![${img.name || 'Image'}](${img.url})`)
+        lines.push(`![${escapeMarkdownLinkText(img.name || t('Image', options.locale ?? 'en'))}](${img.url})`)
         lines.push('')
       })
     }
@@ -181,12 +204,19 @@ function formatMessage(
     // Add other (non-image) attachments
     const otherAttachments = attachments.filter(a => a.type !== 'image')
     if (otherAttachments.length > 0) {
-      lines.push('**Attachments:**')
+      lines.push(`**${t('Attachments', options.locale ?? 'en')}:**`)
       otherAttachments.forEach(att => {
+        const locale = options.locale ?? 'en'
+        // Do not leave an unsafe scheme as plain Markdown either: some
+        // renderers autolink it even without explicit [label](target) syntax.
+        const name = escapeMarkdownLinkText(
+          att.name || (att.type === 'link' ? t('Attachment', locale) : att.url) || t('Attachment', locale)
+        )
         if (att.type === 'link') {
-          lines.push(`- [${att.name || att.url}](${att.url})`)
+          const safeUrl = sanitizeUrl(att.url)
+          lines.push(safeUrl ? `- [${name}](${safeUrl})` : `- ${name}`)
         } else {
-          lines.push(`- ${att.name || att.url}`)
+          lines.push(`- ${name}`)
         }
       })
     }
@@ -233,11 +263,22 @@ function collectArtifactReferences(
 
   for (const message of conversation.messages) {
     for (const att of message.attachments || []) {
-      if (att.url && att.type !== 'image') add(att.name || att.url, att.url)
+      if (att.url && att.type !== 'image' && shouldIncludeAttachment(att, options)) {
+        add(att.name || att.url, att.url)
+      }
     }
   }
 
   return refs
+}
+
+/** Keep user-upload filtering identical in the transcript and artifact list. */
+function shouldIncludeAttachment(attachment: Attachment, options: ExportOptions): boolean {
+  return !(
+    options.includeUploadedFiles === false &&
+    attachment.uploaded === true &&
+    attachment.type !== 'image'
+  )
 }
 
 /** Return inline artifacts that would otherwise disappear when tool blocks are hidden. */
@@ -288,14 +329,19 @@ function sanitizeUrl(url: string): string {
  * @param role - The message role
  * @returns Formatted role label
  */
-function formatRoleLabel(role: ChatMessage['role']): string {
+function formatRoleLabel(
+  role: ChatMessage['role'],
+  conversation: Conversation,
+  options: ExportOptions
+): string {
+  const locale = options.locale ?? 'en'
   switch (role) {
     case 'user':
-      return '👤 User'
+      return `👤 ${t('User', locale)}`
     case 'assistant':
-      return '🤖 Assistant'
+      return `🤖 ${options.assistantDisplayName?.trim() || conversation.modelName?.trim() || t('Assistant', locale)}`
     case 'system':
-      return '⚙️ System'
+      return `⚙️ ${t('System', locale)}`
     default:
       return role
   }
@@ -397,13 +443,7 @@ function formatCodeBlock(block: CodeBlock): string[] {
  * @returns Sanitized filename
  */
 export function generateMarkdownFilename(conversation: Conversation): string {
-  const title = conversation.title || 'conversation'
-  const sanitized = title
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')  // Remove filesystem-unsafe chars only
-    .replace(/\s+/g, '-')                      // Replace spaces with hyphens
-    .replace(/-+/g, '-')                       // Collapse multiple hyphens
-    .replace(/^-|-$/g, '')                     // Remove leading/trailing hyphens
-    .substring(0, 200)                         // Truncate
+  const sanitized = sanitizeFilename(conversation.title || 'conversation')
   
   return sanitized ? `${sanitized}.md` : 'conversation.md'
 }
