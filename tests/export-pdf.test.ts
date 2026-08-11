@@ -371,7 +371,16 @@ describe('Export PDF', () => {
       expect(formatMessageTimestamp(timestamp)).toBe('2026-07-30 · 21:17')
       expect(html).toContain('<div class="message-meta"><span class="role">GPT-5.6 Thinking</span><span class="meta-separator"')
       expect(html).not.toContain('letter-spacing: 0.08em')
-      expect(html).not.toContain('21:17:49')
+
+      // The visible label is intentionally minute-precision, while the
+      // machine-readable datetime keeps the original seconds. Inspect the
+      // rendered node instead of searching the whole HTML, because the ISO
+      // attribute necessarily contains the seconds on UTC runners.
+      const timestampNode = new DOMParser()
+        .parseFromString(html, 'text/html')
+        .querySelector('time.timestamp')
+      expect(timestampNode?.textContent).toBe('2026-07-30 · 21:17')
+      expect(timestampNode?.getAttribute('datetime')).toBe(new Date(timestamp).toISOString())
     })
 
     describe('Artifacts section (exportArtifacts) — mirrors markdown', () => {
