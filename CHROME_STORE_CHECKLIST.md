@@ -35,7 +35,7 @@
   - storage: "Store user export preferences and settings"
   - activeTab: "Access current tab when user clicks export button"
   - downloads: "Save exported PDF and Markdown files to user's computer"
-  - alarms: "Automatically clean up temporary export data after 1 hour"
+  - alarms: "Wake scheduled Markdown export checks and clean up temporary export data"
   - host_permissions: "Parse conversations from AI platform pages for export"
 
 ## Single Purpose Statement
@@ -54,6 +54,6 @@
 - Updates: typically within 24 hours
 
 ## After Approval
-- [ ] Set up GitHub Pages for privacy policy URL
+- [ ] Verify the GitHub Pages privacy-policy deployment URL
 - [ ] Submit to Firefox Add-ons (AMO) — free
 - [ ] Submit to Edge Add-ons — free

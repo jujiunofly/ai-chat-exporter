@@ -7,16 +7,18 @@ Thanks for your interest! Here's how to get started.
 ```bash
 git clone https://github.com/pinguarmy/ai-chat-exporter.git
 cd ai-chat-exporter
-npm install
+npm ci
 npm test
+npm run lint
 ```
 
 ## Development
 
 ```bash
 npx plasmo dev    # Watch mode with hot reload
-npm test          # Run all 231 tests
-npx plasmo build  # Production build
+npm test          # Run the full suite
+npm run lint      # TypeScript check
+npm run build     # Verified browser and source packages
 ```
 
 ## Pull Request Process
@@ -25,7 +27,7 @@ npx plasmo build  # Production build
 2. Create a branch: `git checkout -b feature/my-feature`
 3. Make your changes
 4. Run tests: `npm test`
-5. Build: `npx plasmo build`
+5. Verify: `npm test && npm run lint && npm run build`
 6. Commit: `git commit -m 'Add my feature'`
 7. Push: `git push origin feature/my-feature`
 8. Open a PR
@@ -40,7 +42,7 @@ npx plasmo build  # Production build
 
 ## Good First Issues
 
-- Firefox support (Manifest V2)
+- Firefox store polish and compatibility improvements
 - HTML export format
 - Conversation search in bulk mode
 - Syntax highlighting in PDF exports

@@ -1,5 +1,10 @@
 # Scheduled Auto-Export Implementation Plan
 
+> **Status (v1.2.5): implemented.** This document is retained as the original
+> design record. For the current user-facing behavior and release constraints,
+> see [`docs/SCHEDULED_EXPORT_FRONTEND_BRIEF.md`](docs/SCHEDULED_EXPORT_FRONTEND_BRIEF.md)
+> and [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md).
+
 ## Executive Summary
 
 Add a scheduled auto-export feature to AI Chat Exporter that periodically fetches new conversations from configured platforms and exports them automatically — without requiring the user to manually open the popup.
@@ -10,12 +15,12 @@ Add a scheduled auto-export feature to AI Chat Exporter that periodically fetche
 
 ### Current State
 
-- **MV3 service worker** (`src/background.ts`) — already uses `chrome.alarms` for cleanup
+- **MV3 service worker** (`src/background.ts`) — owns scheduled checks, cleanup, and cancellation state
 - **Content scripts** per platform — each has `FETCH_ALL_CONVERSATIONS` and `FETCH_CONVERSATION_DETAIL` message handlers
-- **Export logic** lives in the popup (`src/popup.tsx`), not the service worker
+- **Manual export logic** lives in the popup; scheduled Markdown export runs in the service worker
 - **`chrome.downloads.download()`** can be called from the service worker
 - **Permissions** already include `storage`, `activeTab`, `downloads`, `alarms`
-- **Missing permission**: `tabs` (needed to create/close tabs from background)
+- **Permission boundary**: the manifest intentionally avoids the broad `tabs` permission
 
 ### How Scheduled Export Works
 

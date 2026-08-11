@@ -141,8 +141,8 @@
 - [ ] `{conv_date}` → `YYYY-MM-DD` from conversation creation date
 - [ ] `{title}` → sanitized (spaces→hyphens, unsafe chars removed, truncated to 200)
 - [ ] `{msgcount}` → actual message count
-- [ ] `{date}` → today's export date
-- [ ] `{datetime}` → `YYYY-MM-DDTHHmmss`
+- [ ] `{date}` → conversation start date (falls back to export time when unavailable)
+- [ ] `{datetime}` → conversation start date/time (`YYYY-MM-DDTHHmmss`, with the same fallback)
 - [ ] Missing tokens (e.g. no `createdAt`) fall back to current date
 
 ---

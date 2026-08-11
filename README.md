@@ -8,7 +8,7 @@
 [![Firefox Add-on](https://img.shields.io/badge/Firefox-Add--on-orange?logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/en-US/firefox/addon/pinguarmy-ai-chat-exporter/)
 [![Edge Extension](https://img.shields.io/badge/Edge-Extension-blue?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/ai-chat-exporter/ndjcmigocoflghenpchbldpkaccechpg)
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-495%20passing-brightgreen)](https://github.com/pinguarmy/ai-chat-exporter/actions)
+[![CI](https://github.com/pinguarmy/ai-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/pinguarmy/ai-chat-exporter/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Plasmo](https://img.shields.io/badge/Built_with-Plasmo-purple.svg)](https://plasmo.com)
 
@@ -41,7 +41,8 @@ Export any conversation to **PDF** or **Markdown** with proper formatting, code 
 | **Multi-Platform** | Works on ChatGPT, Gemini, Claude, DeepSeek, and Grok |
 | **PDF Export** | Clean, print-ready PDF with headings, lists, code blocks, LaTeX, and proper page breaks |
 | **Markdown Export** | Structured `.md` files with code blocks, headers, LaTeX equations, and formatting |
-| **Bulk Export** | Fetch ALL your conversations via API and export multiple at once |
+| **Bulk Export** | Fetch the full conversation list via API where available, with a DOM fallback, and export multiple at once |
+| **Scheduled Auto-Export** | Run Markdown-only exports on a bounded schedule while Chrome and the extension are alive |
 | **Custom Filenames** | Template system with `{date}`, `{title}`, `{platform}`, `{conv_date}`, `{msgcount}` |
 | **Auto-Download** | No save dialogs — files go straight to your configured folder |
 | **Organized Folders** | Auto-sort exports into `ChatGPT/`, `Gemini/`, `Claude/`, `DeepSeek/`, or `Grok/` subfolders |
@@ -69,10 +70,10 @@ Export any conversation to **PDF** or **Markdown** with proper formatting, code 
 git clone https://github.com/pinguarmy/ai-chat-exporter.git
 cd ai-chat-exporter
 
-# Install
-npm install
+# Install the locked dependency tree
+npm ci
 
-# Build (creates both Chrome/Edge and Firefox ZIPs)
+# Build (creates Chrome/Edge, Firefox, and source-review ZIPs)
 npm run build
 
 # Load in Chrome:
@@ -95,7 +96,7 @@ npm run build
 
 1. Navigate to ChatGPT, Gemini, Claude, DeepSeek, or Grok
 2. Click the extension icon → **Bulk** tab
-3. Wait for conversations to load (uses API — gets ALL, not just visible)
+3. Wait for conversations to load (uses the provider API where available, with a DOM fallback)
 4. Select conversations with checkboxes
 5. Click **Export Selected**
 
@@ -105,8 +106,8 @@ Configure filename patterns in Settings:
 
 | Token | Output | Example |
 |-------|--------|---------|
-| `{date}` | Current/export date | `2026-06-11` |
-| `{datetime}` | Current date & time | `2026-06-11T143022` |
+| `{date}` | Conversation start date (falls back to export date) | `2026-06-08` |
+| `{datetime}` | Conversation start date and time (falls back to export time) | `2026-06-08T093000` |
 | `{conv_date}` | Conversation start date | `2026-06-08` |
 | `{conv_datetime}` | Conversation start date & time | `2026-06-08T093000` |
 | `{end_date}` | Export date (alias) | `2026-06-11` |
@@ -115,7 +116,7 @@ Configure filename patterns in Settings:
 | `{index}` | Number (bulk) | `001` |
 | `{msgcount}` | Message count | `24` |
 
-Default pattern: `{conv_date}-{title}` → `2026-06-08-how-to-learn-python.pdf`
+Default pattern: `{date}-{title}` → `2026-06-08-how-to-learn-python.pdf`
 
 ### Download Folders
 
@@ -125,38 +126,42 @@ Choose where files are saved in Settings:
 - **By Platform** → `Downloads/ChatGPT/`, `Downloads/Gemini/`, `Downloads/Claude/`, `Downloads/DeepSeek/`, or `Downloads/Grok/`
 - **Custom** → Any folder name you choose (Unicode supported)
 
+### Scheduled Auto-Export
+
+Scheduled export is an optional setting in the Options page. Enable the
+feature, choose one or more providers, and set a rolling interval or local
+time. It exports Markdown only, respects the same filename and folder rules as
+manual Markdown export, and keeps provider-level status and retry information
+in local extension storage. Chrome and the extension must remain alive for
+alarms to run; a scheduled run may start at or shortly after its due time.
+
 ## How It Works
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌───────────────┐
-│  Content     │────▶│  DOM Parser  │────▶│  Conversation │
-│  Script      │     │  (messages)  │     │  Object       │
-└─────────────┘     └──────────────┘     └───────┬───────┘
-                                                  │
-┌─────────────┐     ┌──────────────┐              ▼
-│  Hook        │────▶│  Credential  │     ┌───────────────┐
-│  Script      │     │  Capture     │     │  Export Engine │
-└─────────────┘     └──────────────┘     │  (PDF / MD)   │
-                                          └───────┬───────┘
-                                                  │
-                                                  ▼
-                                          ┌───────────────┐
-                                          │  Download      │
-                                          │  (auto-save)   │
-                                          └───────────────┘
+┌──────────────────┐     ┌────────────────────┐     ┌──────────────────┐
+│ Provider content │────▶│ Normalized         │────▶│ Export engine    │
+│ scripts          │     │ Conversation model│     │ PDF / Markdown   │
+│ DOM + API paths  │     │ API/DOM fallback   │     └────────┬─────────┘
+└──────────────────┘     └────────────────────┘              │
+                                                            ▼
+                                                   ┌──────────────────┐
+                                                   │ Browser download │
+                                                   │ + export history │
+                                                   └──────────────────┘
 ```
 
 - **Content scripts** parse conversations from the page DOM
-- **API detail fetcher** retrieves full conversation via platform API (preferred over DOM for better formatting)
-- **Parser fallback** compares DOM vs API results and picks the more complete one
+- **API detail fetcher** retrieves fuller conversation data where a provider exposes it, while retaining a DOM fallback
+- **Parser runtime** shares message handling, completeness comparison, rate-limit handling, and provider-specific overrides
 - **Export engine** converts to PDF (html2canvas + jsPDF) or Markdown
-- **Auto-download** saves to configured folder without prompts
+- **Auto-download** saves to the configured folder by default; manual exports may opt into the browser Save As chooser
+- **Scheduled export** uses Chrome alarms for bounded Markdown-only runs while Chrome and the extension are alive
 
 ## Development
 
 ```bash
-# Install
-npm install
+# Install the locked dependency tree
+npm ci
 
 # Development mode (watch + hot reload)
 npx plasmo dev
@@ -164,7 +169,7 @@ npx plasmo dev
 # Run tests
 npm test
 
-# Production build (creates Chrome/Edge + Firefox ZIPs)
+# Production build (creates browser packages plus the source-review ZIP)
 npm run build
 ```
 
@@ -183,19 +188,22 @@ ai-chat-exporter/
 │   │   ├── gemini-parser.ts   # Gemini hook + API parser
 │   │   └── grok-parser.ts     # Grok DOM parser
 │   ├── lib/
-│   │   ├── types.ts           # TypeScript interfaces
+│   │   ├── types.ts           # Shared conversation/settings contracts
+│   │   ├── parser-runtime.ts  # Shared provider message runtime
+│   │   ├── parser-fallback.ts # DOM/API completeness comparison
 │   │   ├── export-markdown.ts # Markdown generator (LaTeX support)
-│   │   ├── export-pdf.ts      # PDF generator (markdown-to-HTML)
+│   │   ├── export-pdf.ts      # PDF generator (HTML + text layer)
+│   │   ├── scheduled-export.ts # Scheduled export policy and runtime helpers
 │   │   ├── filename.ts        # Filename templates (Unicode-safe)
-│   │   ├── download-path.ts   # Download folder logic
-│   │   ├── parser-fallback.ts # DOM vs API comparison
+│   │   ├── export-download.ts # Download/finalization helpers
 │   │   └── dom-utils.ts       # DOM helpers
-│   ├── components/            # React UI components
-│   ├── styles/                # CSS (Gemini design system)
+│   ├── components/            # Shared React UI components
+│   ├── styles/                # Popup, options, and print styles
 │   └── tabs/                  # Preview page
 ├── tests/                     # Vitest + jsdom test suite
 ├── scripts/
-│   ├── build-all.sh           # Build for Chrome/Edge + Firefox
+│   ├── build-all.sh           # Build and verify browser/source packages
+│   ├── verify-build.js        # Manifest, CSS, icon, and mirror checks
 │   └── patch-firefox-manifest.js  # Firefox MV3 compatibility
 ├── store-assets/              # Final store screenshots and promotional art
 ├── docs/MAINTENANCE.md        # Architecture, verification, and release checks
@@ -209,7 +217,8 @@ ai-chat-exporter/
 
 ```bash
 npm test                # Run the full test suite
-npx vitest run          # Same
+npm run lint            # TypeScript check
+npm run build           # Browser packages plus source-review archive
 npx vitest watch        # Watch mode
 ```
 
@@ -220,6 +229,7 @@ npm run build
 # Creates:
 #   ai-chat-exporter.zip          → Chrome Web Store + Edge Add-ons
 #   ai-chat-exporter-firefox.zip  → Firefox Add-ons
+#   ai-chat-exporter-source.zip   → Firefox AMO source review (not installable)
 ```
 
 The build fails if the manifest regains the broad `tabs` permission, a full-page

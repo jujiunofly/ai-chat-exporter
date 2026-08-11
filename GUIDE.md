@@ -15,7 +15,10 @@ ai-chat-exporter/
 │   │   ├── deepseek-parser.ts ← DeepSeek DOM parser + API list fetcher
 │   │   └── grok-parser.ts     ← Grok DOM parser + API list fetcher
 │   ├── lib/
-│   │   ├── types.ts           ← All TypeScript interfaces & constants
+│   │   ├── types.ts           ← Shared contracts and defaults
+│   │   ├── parser-runtime.ts  ← Shared provider message runtime
+│   │   ├── parser-fallback.ts ← DOM/API completeness comparison
+│   │   ├── scheduled-export.ts ← Scheduled-export policy and helpers
 │   │   ├── dom-utils.ts       ← Shared DOM helpers (text extraction, code blocks)
 │   │   ├── export-markdown.ts ← Conversation → Markdown converter
 │   │   ├── export-pdf.ts      ← Conversation → PDF (html2canvas + jsPDF)
@@ -31,12 +34,12 @@ ai-chat-exporter/
 │   │   └── print.css           ← Preview page + print media query
 │   └── tabs/
 │       └── preview.tsx         ← Full-page conversation preview
-├── tests/                      ← Vitest test suite (320 tests)
+├── tests/                      ← Vitest test suite
 ├── build/chrome-mv3-prod/      ← Extension build output (load this in Chrome)
 └── GUIDE.md                    ← This file
 ```
 
-## Design System (Gemini-Designed)
+## Design System
 
 All styles use CSS custom properties defined in `src/styles/popup.css`.
 
@@ -108,8 +111,8 @@ For bulk export, DOM-only only sees ~20 sidebar items. API approach fetches ALL:
 
 ### 5. Filename Templates
 Pattern string with `{variable}` tokens:
-- `{date}` → 2026-06-11 (export/current date)
-- `{datetime}` → 2026-06-11T143022 (export/current date+time)
+- `{date}` → 2026-06-08 (conversation start date; export date fallback)
+- `{datetime}` → 2026-06-08T093000 (conversation start date+time; export time fallback)
 - `{conv_date}` → 2026-06-08 (conversation start date from createdAt)
 - `{conv_datetime}` → 2026-06-08T093000 (conversation start date+time)
 - `{end_date}` → 2026-06-11 (alias for export date)
@@ -153,8 +156,9 @@ Extension uses `chrome.runtime.sendMessage` / `chrome.tabs.sendMessage`:
 Framework: Vitest with jsdom environment
 
 ```
-npm test           # Run all 320 tests
-npx vitest run     # Same
+npm test           # Run the full suite
+npm run lint       # TypeScript check
+npm run build      # Verified Chrome/Edge, Firefox, and source packages
 npx vitest watch   # Watch mode
 ```
 
@@ -173,14 +177,14 @@ Test files:
 ## Build & Load
 
 ```bash
-# Install dependencies
-npm install
+# Install the locked dependency tree
+npm ci
 
 # Development build (watch mode)
 npx plasmo dev
 
-# Production build
-npx plasmo build
+# Production build and verification
+npm run build
 
 # Load in Chrome:
 # 1. Open chrome://extensions/
@@ -191,22 +195,28 @@ npx plasmo build
 
 ## Key Design Decisions
 
-1. **DOM-first parsing**: Reads rendered HTML, not internal APIs. Legally clean.
-2. **API for lists only**: Uses public session API for conversation INDEX only.
-   Content is still parsed from DOM. Same endpoints the browser itself uses.
+1. **Provider-specific parsing with safe fallbacks**: Parsers use the provider's
+   page and API paths where available, then retain a DOM fallback when an API
+   request is unavailable or incomplete.
+2. **Completeness before export**: The shared parser runtime compares API and
+   rendered results so a partial branch is not preferred over a fuller one.
 3. **No debugger permission**: Original needed it for session tokens.
    We use fetch from content script context instead.
-4. **Minimal permissions**: Only storage, activeTab, downloads.
-5. **CSS custom properties**: Gemini's design system supports light/dark themes.
+4. **Minimal permissions**: storage, activeTab, downloads, alarms, and the
+   provider host permissions required for parsing.
+5. **CSS custom properties**: Shared tokens support light/dark themes across
+   popup, options, and preview pages.
 6. **html2canvas + jsPDF for PDF**: No print dialog, actual file download.
-7. **Auto-download**: saveAs=false everywhere. User chose export = consent.
+7. **Auto-download by default**: Manual exports may opt into Save As; scheduled
+   exports never open a chooser.
 
 ## Adding a New Platform
 
 1. Create `src/contents/newplatform-parser.ts`
-   - Implement `PlatformParser` interface from types.ts
-   - Add `getConversationList()` for bulk support
-   - Add message handlers for PARSE_CONVERSATION, FETCH_ALL_CONVERSATIONS
+   - Implement the parser methods used by `ParserRuntimeParser` in
+     `src/lib/parser-runtime.ts`
+   - Register the shared `ParserRuntimeConfig` message runtime
+   - Add `getConversationList()` and API detail methods where supported
 
 2. Update `src/lib/types.ts`
    - Add platform to the union type

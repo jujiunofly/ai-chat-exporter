@@ -42,8 +42,10 @@ The production dependency gate is currently clean:
 npm audit --omit=dev: 0 vulnerabilities
 ```
 
-The full audit currently reports 74 findings (3 moderate, 71 high, 0 critical)
-in the development/build chain (`plasmo@0.90.5` through Parcel 2.9.3 and related packaging tools). Those packages are not
+The full audit is expected to report findings in the development/build chain
+(`plasmo@0.90.5` through Parcel and related packaging tools); the exact count
+drifts with npm's advisory database (the historical v1.2.5 snapshot reported
+79 findings). Those packages are not
 bundled into the extension ZIP, so they are not the same as a runtime
 vulnerability in the installed extension. They are still our build supply-chain
 responsibility: keep the development server local, monitor upstream fixes, and
