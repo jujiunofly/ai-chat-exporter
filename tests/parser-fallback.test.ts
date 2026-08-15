@@ -88,6 +88,24 @@ describe('parser API fallback decision', () => {
     expect(preferMoreCompleteConversation(dom, api)).toBe(dom)
   })
 
+  it('prefers provider-verified API data over a balanced unverified DOM tail', () => {
+    const dom = {
+      ...conv([
+        { id: 'u-tail', role: 'user', content: 'Rendered tail question' },
+        { id: 'a-tail', role: 'assistant', content: 'Rendered tail answer' }
+      ]),
+      source: 'dom' as const,
+      sourceCompleteness: 'unverified' as const,
+    }
+    const api = {
+      ...conv([{ id: 'u1', role: 'user', content: 'Prompt then Stop' }]),
+      source: 'api' as const,
+      sourceCompleteness: 'verified' as const,
+    }
+
+    expect(preferMoreCompleteConversation(dom, api)).toBe(api)
+  })
+
   it('merges a DOM image into the matching API message without changing API text or order', () => {
     const api = conv([
       { id: 'u1', role: 'user', content: 'Question' },

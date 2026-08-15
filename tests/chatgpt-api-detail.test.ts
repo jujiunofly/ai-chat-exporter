@@ -1,6 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { isConversationExportable } from '../src/lib/conversation-integrity'
 import { ProviderRateLimitError } from '../src/lib/provider-rate-limit'
 type ChatGPTParserConstructor = typeof import('../src/contents/chatgpt-parser').ChatGPTParser
+type ResolveChatGptActiveBranch = typeof import('../src/contents/chatgpt-parser').resolveChatGptActiveBranch
 
 const storage: Record<string, unknown> = {}
 const mockChrome = {
@@ -20,6 +22,8 @@ const mockChrome = {
 }
 
 let ChatGPTParser: ChatGPTParserConstructor
+let resolveChatGptActiveBranch: ResolveChatGptActiveBranch
+let runtimeListener: (message: any, sender: any, sendResponse: (response: any) => void) => boolean | void
 
 function response(status: number, data: unknown) {
   return {
@@ -32,12 +36,15 @@ function response(status: number, data: unknown) {
 describe('ChatGPT API detail parser', () => {
   beforeAll(async () => {
     vi.stubGlobal('chrome', mockChrome)
-    ;({ ChatGPTParser } = await import('../src/contents/chatgpt-parser'))
+    ;({ ChatGPTParser, resolveChatGptActiveBranch } = await import('../src/contents/chatgpt-parser'))
+    runtimeListener = mockChrome.runtime.onMessage.addListener.mock.calls.at(-1)?.[0]
   })
 
   beforeEach(() => {
     vi.clearAllMocks()
     for (const key of Object.keys(storage)) delete storage[key]
+    document.body.innerHTML = ''
+    window.history.replaceState({}, '', '/')
   })
 
   it('refreshes an expired list token before retrying the API request', async () => {
@@ -54,6 +61,31 @@ describe('ChatGPT API detail parser', () => {
     expect(fetchMock.mock.calls[3][1].headers.Authorization).toBe('Bearer fresh-token')
     expect(mockChrome.storage.local.get).not.toHaveBeenCalled()
     expect(mockChrome.storage.local.set).not.toHaveBeenCalled()
+  })
+
+  it('labels a later-page list failure as incomplete and falls back to the sidebar', async () => {
+    const apiItems = Array.from({ length: 100 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      title: `API conversation ${index}`
+    }))
+    document.body.innerHTML = `
+      <nav><a href="/c/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb">Visible fallback</a></nav>
+    `
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response(200, { accessToken: 'token' }))
+      .mockResolvedValueOnce(response(200, { items: apiItems }))
+      .mockResolvedValueOnce(response(500, {})))
+
+    const parser = new ChatGPTParser()
+    const conversations = await parser.fetchAllConversations()
+
+    expect(conversations).toEqual([
+      expect.objectContaining({
+        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        title: 'Visible fallback'
+      })
+    ])
+    expect(parser.getConversationListMeta()).toEqual({ source: 'sidebar', complete: false })
   })
 
   it('retries a detail request with a refreshed token and exports only the active branch', async () => {
@@ -111,6 +143,126 @@ describe('ChatGPT API detail parser', () => {
       ['user', 'Which answer is current?'],
       ['assistant', 'This is the active answer.']
     ])
+    expect(conversation).toMatchObject({ source: 'api', sourceCompleteness: 'verified' })
+  })
+
+  it('verifies a long linear current-node chain without message-count heuristics', () => {
+    const mapping: Record<string, any> = {
+      root: { parent: null, message: null }
+    }
+    let parent = 'root'
+    for (let index = 0; index < 80; index++) {
+      const id = `node-${index}`
+      mapping[id] = { parent, message: { id, create_time: index } }
+      parent = id
+    }
+
+    const result = resolveChatGptActiveBranch(mapping, 'node-79')
+    expect(result.complete).toBe(true)
+    expect(result.nodes).toHaveLength(81)
+  })
+
+  it('rejects a current branch whose parent is missing', () => {
+    const result = resolveChatGptActiveBranch({
+      tail: { parent: 'missing', message: { id: 'tail' } }
+    }, 'tail')
+
+    expect(result.complete).toBe(false)
+    expect(result.issue).toBe('missing_parent')
+  })
+
+  it('rejects a cycle in the current branch', () => {
+    const result = resolveChatGptActiveBranch({
+      first: { parent: 'second' },
+      second: { parent: 'first' }
+    }, 'second')
+
+    expect(result.complete).toBe(false)
+    expect(result.issue).toBe('cycle')
+  })
+
+  it('does not certify a fallback leaf when current_node is absent', () => {
+    const result = resolveChatGptActiveBranch({
+      root: { parent: null },
+      answer: { parent: 'root', message: { create_time: 2 } }
+    }, undefined)
+
+    expect(result.nodes).toHaveLength(2)
+    expect(result.complete).toBe(false)
+    expect(result.issue).toBe('current_node_missing')
+  })
+
+  it('stops current export when a balanced API branch has a missing parent', async () => {
+    const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    window.history.replaceState({}, '', `/c/${id}`)
+    document.body.innerHTML = `
+      <div data-message-author-role="user" data-message-id="dom-user">Tail question</div>
+      <div data-message-author-role="assistant" data-message-id="dom-answer">Tail answer</div>
+    `
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response(200, { accessToken: 'token' }))
+      .mockResolvedValueOnce(response(200, {
+        id,
+        current_node: 'api-answer',
+        mapping: {
+          'api-user': {
+            parent: 'missing-parent',
+            message: {
+              id: 'api-user',
+              author: { role: 'user' },
+              content: { parts: ['Tail question'] }
+            }
+          },
+          'api-answer': {
+            parent: 'api-user',
+            message: {
+              id: 'api-answer',
+              author: { role: 'assistant' },
+              content: { parts: ['Tail answer'] }
+            }
+          }
+        }
+      })))
+
+    const responsePayload = await new Promise<any>((resolve) => {
+      expect(runtimeListener({ type: 'PARSE_CONVERSATION', data: { forceVerify: true } }, {}, resolve)).toBe(true)
+    })
+
+    expect(responsePayload.data).toBeUndefined()
+    expect(responsePayload.error).toContain('verifiably complete active branch')
+    expect(responsePayload.meta).toMatchObject({
+      apiDetailRequired: true,
+      pageFallbackSupported: false,
+      domMessageCount: 2,
+      apiMessageCount: 2,
+      apiIntegrityReasons: expect.arrayContaining(['source_unverified'])
+    })
+  })
+
+  it('marks a broken API mapping as explicitly unexportable', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { accessToken: 'token' }))
+      .mockResolvedValueOnce(response(200, {
+        id: 'conversation-id',
+        current_node: 'answer',
+        mapping: {
+          user: {
+            parent: 'missing-parent',
+            message: { id: 'user', author: { role: 'user' }, content: { parts: ['Question'] } }
+          },
+          answer: {
+            parent: 'user',
+            message: { id: 'answer', author: { role: 'assistant' }, content: { parts: ['Answer'] } }
+          }
+        }
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const conversation = await new ChatGPTParser().fetchConversationDetail('conversation-id')
+
+    expect(conversation).toMatchObject({ source: 'api', sourceCompleteness: 'unverified' })
+    expect(conversation?.messages).toHaveLength(2)
+    expect(isConversationExportable(conversation)).toBe(false)
   })
 
   it('surfaces a 429 detail response as the safe rate-limit signal', async () => {

@@ -686,7 +686,13 @@ export default function Popup() {
             : conversationListMeta?.source === 'sidebar'
               ? { message: 'Claude full history could not be loaded. Showing only currently visible sidebar items; refresh to retry.', warning: true }
               : null
-          : null
+          : conversationListMeta && platformLabel
+            ? conversationListMeta.source === 'api'
+              ? conversationListMeta.complete
+                ? { message: `${platformLabel} account history loaded${conversationListMeta.pagesFetched ? ` (${conversationListMeta.pagesFetched} page${conversationListMeta.pagesFetched === 1 ? '' : 's'})` : ''}.`, warning: false }
+                : { message: `${platformLabel} returned a partial history. The count shown is not complete; refresh to retry.`, warning: true }
+              : { message: `${platformLabel} full history could not be loaded. Showing only currently visible sidebar items; refresh to retry.`, warning: true }
+            : null
 
   return (
     <div className="popup-container">

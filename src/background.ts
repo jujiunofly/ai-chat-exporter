@@ -33,6 +33,7 @@ import {
   PLATFORM_URLS,
   ALL_PLATFORMS,
   shouldAdvanceScheduledLastRun,
+  isScheduledConversationListComplete,
   ScheduledRunBudget,
   mergeScheduledExportSettings,
   runWithConcurrency,
@@ -1223,6 +1224,7 @@ async function runScheduledExportForPlatform(
     reporter.markPlatformStatus(platform, 'ready')
 
     const allConversations: ConversationListItem[] = listResponse.data
+    const listComplete = isScheduledConversationListComplete(listResponse.meta)
 
     // 5. Filter out already-exported conversations
     const exportedIds = await getExportedIds(platform)
@@ -1388,7 +1390,7 @@ async function runScheduledExportForPlatform(
         exported,
         failed,
         skipped: Math.max(0, newConversations.length - (exported + failed)),
-        listComplete: true,
+        listComplete,
       }),
       rateLimited,
     }

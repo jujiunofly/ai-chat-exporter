@@ -259,6 +259,19 @@ export function shouldAdvanceScheduledLastRun(summary: ScheduledRunSummary): boo
   return classifyScheduledRun(summary) === 'success' || classifyScheduledRun(summary) === 'skipped'
 }
 
+/**
+ * Translate provider list metadata into the checkpoint safety contract.
+ * Legacy API paths without metadata remain compatible, but an explicit
+ * partial result or any sidebar fallback can never advance `lastRun`.
+ */
+export function isScheduledConversationListComplete(meta: unknown): boolean {
+  if (!meta || typeof meta !== 'object') return true
+  const value = meta as { source?: unknown; complete?: unknown }
+  if (value.source === 'sidebar') return false
+  if (typeof value.complete === 'boolean') return value.complete
+  return true
+}
+
 /** Frequency-to-millisecond mapping */
 const FREQUENCY_INTERVALS: Record<Exclude<ScheduleFrequency, 'custom'>, number> = {
   hourly: 60 * 60 * 1000,

@@ -181,8 +181,10 @@
 - [ ] Each file downloads to correct path (respecting folder mode)
 - [ ] Index token `{index}` produces `001`, `002`, etc.
 - [ ] Failed conversations increment `failed` count
+- [ ] ChatGPT: a later-page API failure falls back to visible sidebar items and labels the count incomplete
 - [ ] Claude: a partially paginated API history is labeled partial; the returned count is never presented as the complete account history
 - [ ] Claude: if API history is unavailable and sidebar items are shown, UI labels the source as incomplete/sidebar-only
+- [ ] DeepSeek and Grok: a later-page API failure discards partial API rows, falls back to visible sidebar items, and labels the count incomplete
 
 ---
 
@@ -309,6 +311,7 @@
 - [ ] Exported record stored in dedup history (no re-export next run)
 - [ ] Status tracks exported/failed counts and safe aggregate failure categories
 - [ ] Scheduled detail export obeys the same source-verification/exportability contract as manual export
+- [ ] Partial API history or sidebar fallback does not advance the provider `lastRun` checkpoint
 
 ---
 
@@ -372,6 +375,22 @@
 
 ---
 
+## 24 — ChatGPT Active-Branch Source Verification
+
+**Scenario A:** Long `mapping` response with an explicit `current_node` whose parent chain reaches root.
+**Scenario B:** Balanced user/assistant tail whose selected chain references a missing parent.
+**Scenario C:** Selected branch contains a parent cycle.
+**Scenario D:** Mapping has plausible leaves but omits `current_node`.
+
+**Pass criteria:**
+- [ ] Root-reaching explicit current branch carries `source: 'api'` and `sourceCompleteness: 'verified'`
+- [ ] Missing-parent and cyclic branches are rejected even when both roles are present
+- [ ] Missing `current_node` may produce diagnostic content but remains unverified and unexportable
+- [ ] Live ChatGPT DOM is unverified and cannot outrank a provider-verified API transcript
+- [ ] Token refresh still retries the authoritative detail request once
+
+---
+
 ## Summary
 
 | # | Scenario | Platforms | Formats | Priority |
@@ -399,5 +418,6 @@
 | 21 | Claude branch structural integrity | Claude | MD + PDF | P0 |
 | 22 | Claude source verification contract | Claude | MD + PDF | P0 |
 | 23 | Virtualized tail media alignment | Claude + API/DOM providers | MD + PDF | P1 |
+| 24 | ChatGPT active-branch source verification | ChatGPT | MD + PDF | P0 |
 
-**23 top-level dogfood scenarios. Provider-specific criteria take precedence over older generic fallback assumptions.**
+**24 top-level dogfood scenarios. Provider-specific criteria take precedence over older generic fallback assumptions.**

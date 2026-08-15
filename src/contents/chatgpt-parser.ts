@@ -35,6 +35,97 @@ const CHATGPT_ALLOWED_ORIGINS = new Set([
   'https://chat.openai.com'
 ])
 
+export type ChatGptBranchIssue =
+  | 'current_node_missing'
+  | 'leaf_missing'
+  | 'missing_parent'
+  | 'cycle'
+  | 'no_resolvable_leaf'
+
+export interface ChatGptBranchResolution {
+  nodes: any[]
+  complete: boolean
+  leafId?: string
+  issue?: ChatGptBranchIssue
+}
+
+interface ChatGptConversationListMeta extends Record<string, unknown> {
+  source: 'api' | 'sidebar'
+  complete: boolean
+  pagesFetched?: number
+}
+
+/**
+ * Resolve ChatGPT's selected root-to-leaf branch and prove that its parent
+ * chain reaches a real root. A plausible-looking partial chain is not enough:
+ * missing parents and cycles must remain visible to the export safety gate.
+ */
+export function resolveChatGptActiveBranch(
+  nodeMap: Record<string, any>,
+  currentNodeId: unknown
+): ChatGptBranchResolution {
+  const buildChain = (leafId: string): ChatGptBranchResolution => {
+    const nodes: any[] = []
+    const visited = new Set<string>()
+    let nodeId = leafId
+
+    while (nodeId) {
+      if (visited.has(nodeId)) {
+        return { nodes, complete: false, leafId, issue: 'cycle' }
+      }
+      visited.add(nodeId)
+
+      const node = nodeMap[nodeId]
+      if (!node || typeof node !== 'object') {
+        return { nodes, complete: false, leafId, issue: 'missing_parent' }
+      }
+
+      nodes.unshift(node)
+      if (node.parent === null) {
+        return { nodes, complete: true, leafId }
+      }
+      if (typeof node.parent !== 'string' || !node.parent) {
+        return { nodes, complete: false, leafId, issue: 'missing_parent' }
+      }
+      nodeId = node.parent
+    }
+
+    return { nodes, complete: false, leafId, issue: 'missing_parent' }
+  }
+
+  if (typeof currentNodeId === 'string' && currentNodeId) {
+    if (!nodeMap[currentNodeId]) {
+      return { nodes: [], complete: false, leafId: currentNodeId, issue: 'leaf_missing' }
+    }
+    return buildChain(currentNodeId)
+  }
+
+  // Preserve the legacy best-effort transcript for diagnostics, but never
+  // certify it: without current_node there is no authoritative branch choice.
+  const parentIds = new Set(
+    Object.values(nodeMap)
+      .map(node => typeof node?.parent === 'string' ? node.parent : null)
+      .filter((id): id is string => Boolean(id))
+  )
+  const fallbackLeafId = Object.entries(nodeMap)
+    .filter(([id]) => !parentIds.has(id))
+    .sort(([, left], [, right]) => {
+      const leftTime = Number(left?.message?.create_time) || 0
+      const rightTime = Number(right?.message?.create_time) || 0
+      return rightTime - leftTime
+    })
+    .at(0)?.[0]
+
+  if (!fallbackLeafId) {
+    return { nodes: [], complete: false, issue: 'no_resolvable_leaf' }
+  }
+
+  const fallback = buildChain(fallbackLeafId)
+  return fallback.complete
+    ? { ...fallback, complete: false, issue: 'current_node_missing' }
+    : fallback
+}
+
 function resolveChatGptOrigin(currentOrigin: unknown): string {
   return typeof currentOrigin === 'string' && CHATGPT_ALLOWED_ORIGINS.has(currentOrigin)
     ? currentOrigin
@@ -48,6 +139,7 @@ export class ChatGPTParser {
   platform = 'chatgpt' as const
   private accessToken: string | null = null
   private authenticationRequired = false
+  private conversationListMeta: ChatGptConversationListMeta = { source: 'sidebar', complete: false }
   private readonly apiOrigin: string
   private readonly legacyTokenCleanup: Promise<void>
 
@@ -59,6 +151,10 @@ export class ChatGPTParser {
   /** Safe aggregate signal for the scheduled-export status surface. */
   isAuthenticationRequired(): boolean {
     return this.authenticationRequired
+  }
+
+  getConversationListMeta(): ChatGptConversationListMeta {
+    return { ...this.conversationListMeta }
   }
 
   /** Remove tokens written by older releases without ever reading them back. */
@@ -155,7 +251,9 @@ export class ChatGPTParser {
         modelName: chatGptModelName(
           document.body.getAttribute('data-model'),
           document.querySelector('[data-model]')?.getAttribute('data-model')
-        )
+        ),
+        source: 'dom',
+        sourceCompleteness: 'unverified'
       }
     } catch (error) {
       return null
@@ -202,16 +300,21 @@ export class ChatGPTParser {
    */
   async fetchAllConversations(): Promise<ConversationListItem[]> {
     const conversations: ConversationListItem[] = []
+    this.conversationListMeta = { source: 'sidebar', complete: false }
     let offset = 0
     const limit = 100
+    const maxPages = 200
     let hasMore = true
+    let pagesFetched = 0
+    let paginationComplete = false
+    let paginationFailed = false
     let retries = 0
     const maxRetries = 1
 
     // Get access token for Authorization header
     let token = await this.getAccessToken()
 
-    while (hasMore) {
+    while (hasMore && pagesFetched < maxPages) {
       try {
         const response = await fetch(
           `${this.apiOrigin}/backend-api/conversations?offset=${offset}&limit=${limit}&order=updated`,
@@ -238,6 +341,7 @@ export class ChatGPTParser {
           }
           this.authenticationRequired = true
           console.error('[ChatGPT Parser] Authentication expired')
+          paginationFailed = true
           break
         }
 
@@ -248,14 +352,17 @@ export class ChatGPTParser {
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) this.authenticationRequired = true
           console.error(`[ChatGPT Parser] API error: ${response.status}`)
+          paginationFailed = true
           break
         }
 
         const data = await response.json()
         const items = data.items || data.conversations || []
+        pagesFetched += 1
 
         if (items.length === 0) {
           hasMore = false
+          paginationComplete = true
           break
         }
 
@@ -275,14 +382,21 @@ export class ChatGPTParser {
         // If we got fewer items than the limit, we've reached the end
         if (items.length < limit) {
           hasMore = false
+          paginationComplete = true
         }
       } catch (error) {
         if (isProviderRateLimitError(error)) throw error
         console.error('[ChatGPT Parser] Error fetching conversations:', error)
+        paginationFailed = true
         break
       }
     }
 
+    if (paginationFailed || !paginationComplete) {
+      return this.getConversationList()
+    }
+
+    this.conversationListMeta = { source: 'api', complete: true, pagesFetched }
     return conversations
   }
 
@@ -332,6 +446,7 @@ export class ChatGPTParser {
 
       if (!data) return null
       const messages: ChatMessage[] = []
+      let sourceCompleteness: Conversation['sourceCompleteness'] = 'unverified'
       let modelName = chatGptModelName(
         data.default_model_slug,
         data.model_slug,
@@ -341,11 +456,13 @@ export class ChatGPTParser {
       )
 
       // ChatGPT API returns a tree of messages with mapping
-      if (data.mapping) {
+      if (data.mapping && typeof data.mapping === 'object') {
         const nodeMap: Record<string, any> = data.mapping
         // A conversation mapping contains every edited/regenerated branch.
         // Only its current_node is the path the user is actually viewing.
-        for (const node of this.getActiveConversationPath(nodeMap, data.current_node)) {
+        const branch = resolveChatGptActiveBranch(nodeMap, data.current_node)
+        sourceCompleteness = branch.complete ? 'verified' : 'unverified'
+        for (const node of branch.nodes) {
           if (node.message) {
             const msg = node.message
             const role = msg.author?.role
@@ -371,8 +488,10 @@ export class ChatGPTParser {
         }
       }
 
-      // Fallback: try flat messages array
-      if (messages.length === 0 && data.messages) {
+      // Older API payloads may be a flat authoritative transcript. Never use
+      // this fallback to hide a broken mapping/current_node tree.
+      else if (Array.isArray(data.messages)) {
+        sourceCompleteness = 'verified'
         for (const msg of data.messages) {
           const role = msg.author?.role || msg.role
           if (role === 'user' || role === 'assistant') {
@@ -403,7 +522,9 @@ export class ChatGPTParser {
         messages,
         createdAt: chatGptTimestamp(data.create_time),
         modelName,
-        platform: 'chatgpt'
+        platform: 'chatgpt',
+        source: 'api',
+        sourceCompleteness
       }
     } catch (error) {
       if (isProviderRateLimitError(error)) throw error
@@ -412,44 +533,6 @@ export class ChatGPTParser {
     }
   }
 
-  /**
-   * Return the root-to-leaf path for the active branch in ChatGPT's message
-   * tree. `current_node` is authoritative; older payloads without it fall
-   * back to the newest leaf rather than exporting every abandoned branch.
-   */
-  private getActiveConversationPath(
-    nodeMap: Record<string, any>,
-    currentNodeId: unknown
-  ): any[] {
-    let nodeId = typeof currentNodeId === 'string' && nodeMap[currentNodeId]
-      ? currentNodeId
-      : null
-
-    if (!nodeId) {
-      const leaves = Object.entries(nodeMap).filter(([, node]) =>
-        !Array.isArray(node?.children) || node.children.length === 0
-      )
-      nodeId = leaves
-        .sort(([, left], [, right]) => {
-          const leftTime = Number(left?.message?.create_time) || 0
-          const rightTime = Number(right?.message?.create_time) || 0
-          return rightTime - leftTime
-        })
-        .at(0)?.[0] || null
-    }
-
-    const path: any[] = []
-    const visited = new Set<string>()
-    while (nodeId && nodeMap[nodeId] && !visited.has(nodeId)) {
-      visited.add(nodeId)
-      const node = nodeMap[nodeId]
-      path.unshift(node)
-      nodeId = typeof node.parent === 'string' ? node.parent : null
-    }
-
-    return path
-  }
-  
   /**
    * Extract all messages from the conversation
    * Uses deduplication to avoid counting the same message twice
@@ -728,7 +811,11 @@ export const config = {
 registerParserMessageHandler({
   platform: 'chatgpt',
   parser,
-  extractConversationId: url => url.match(/\/c\/([a-f0-9-]+)/)?.[1] ?? null
+  extractConversationId: url => url.match(/\/c\/([a-f0-9-]+)/)?.[1] ?? null,
+  requireApiDetailForCurrentExport: true,
+  preferApiDetailWhenComplete: true,
+  apiDetailUnavailableError:
+    'ChatGPT did not return a verifiably complete active branch. Export was stopped instead of saving a potentially truncated page snapshot. Reload ChatGPT and try again.'
 })
 
 // Run on page load

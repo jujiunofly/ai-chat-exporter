@@ -74,11 +74,64 @@ describe('provider DOM fallback regressions', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ data: { items: [{ id: 'one', title: 'Duplicate' }, { id: 'two', title: 'Two' }] } }),
-      })
+    })
     vi.stubGlobal('fetch', fetchMock)
-    const conversations = await new DeepSeekParser().fetchAllConversations()
+    const parser = new DeepSeekParser()
+    const conversations = await parser.fetchAllConversations()
     expect(conversations.map(item => item.id)).toEqual(['one', 'two'])
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(String(fetchMock.mock.calls[1][0])).toContain('cursor=next')
+    expect(parser.getConversationListMeta()).toEqual({ source: 'api', complete: true, pagesFetched: 2 })
+  })
+
+  it('discards a partial DeepSeek API list and labels the sidebar fallback incomplete', async () => {
+    document.body.innerHTML = '<aside><a href="/a/chat/s/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb">Sidebar chat</a></aside>'
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { items: [{ id: 'api-only', title: 'Partial' }], has_more: true, next_cursor: 'next' } }),
+      })
+      .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) }))
+
+    const parser = new DeepSeekParser()
+    const conversations = await parser.fetchAllConversations()
+
+    expect(conversations.map(item => item.id)).toEqual(['bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'])
+    expect(parser.getConversationListMeta()).toEqual({ source: 'sidebar', complete: false })
+  })
+
+  it('labels a terminal Grok API list complete', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ conversations: [{ conversationId: 'grok-api', title: 'API chat' }] }),
+    }))
+
+    const parser = new GrokParser()
+    const conversations = await parser.fetchAllConversations()
+
+    expect(conversations.map(item => item.id)).toEqual(['grok-api'])
+    expect(parser.getConversationListMeta()).toEqual({ source: 'api', complete: true })
+  })
+
+  it('discards a partial Grok API list and labels the sidebar fallback incomplete', async () => {
+    document.body.innerHTML = '<nav><a href="/c/sidebar-grok">Sidebar chat</a></nav>'
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          conversations: [{ conversationId: 'api-only', title: 'Partial' }],
+          nextPageToken: 'next',
+        }),
+      })
+      .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) }))
+
+    const parser = new GrokParser()
+    const conversations = await parser.fetchAllConversations()
+
+    expect(conversations.map(item => item.id)).toEqual(['sidebar-grok'])
+    expect(parser.getConversationListMeta()).toEqual({ source: 'sidebar', complete: false })
   })
 })

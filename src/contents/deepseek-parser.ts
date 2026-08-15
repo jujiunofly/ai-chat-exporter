@@ -36,6 +36,12 @@ export interface DeepSeekHistoryPage {
   hasMore: boolean
 }
 
+interface DeepSeekConversationListMeta extends Record<string, unknown> {
+  source: 'api' | 'sidebar'
+  complete: boolean
+  pagesFetched?: number
+}
+
 /** Normalize the several history response envelopes seen in DeepSeek builds. */
 export function parseDeepSeekHistoryPage(data: any): DeepSeekHistoryPage {
   const envelope = data?.data && !Array.isArray(data.data) ? data.data : data
@@ -64,10 +70,15 @@ export function parseDeepSeekHistoryPage(data: any): DeepSeekHistoryPage {
 export class DeepSeekParser {
   platform = 'deepseek' as const
   private authenticationRequired = false
+  private conversationListMeta: DeepSeekConversationListMeta = { source: 'sidebar', complete: false }
 
   /** Safe aggregate signal for the scheduled-export status surface. */
   isAuthenticationRequired(): boolean {
     return this.authenticationRequired
+  }
+
+  getConversationListMeta(): DeepSeekConversationListMeta {
+    return { ...this.conversationListMeta }
   }
 
   /**
@@ -147,9 +158,11 @@ export class DeepSeekParser {
    * DeepSeek uses cookie-based auth, so we can fetch directly with credentials: 'include'
    */
   async fetchAllConversations(): Promise<ConversationListItem[]> {
+    this.conversationListMeta = { source: 'sidebar', complete: false }
     const conversations: ConversationListItem[] = []
     const seen = new Set<string>()
     let paginationFailed = false
+    let pagesFetched = 0
 
     try {
       // Try to fetch conversation history from the sidebar/API
@@ -178,6 +191,7 @@ export class DeepSeekParser {
         this.authenticationRequired = false
 
         const pageData = parseDeepSeekHistoryPage(await response.json())
+        pagesFetched += 1
         for (const item of pageData.items) {
           const id = item?.chat_session_id || item?.id
           if (typeof id !== 'string' || !id || seen.has(id)) continue
@@ -214,6 +228,7 @@ export class DeepSeekParser {
       return this.getConversationList()
     }
 
+    this.conversationListMeta = { source: 'api', complete: true, pagesFetched }
     return conversations
   }
 
