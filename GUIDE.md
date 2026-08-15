@@ -95,6 +95,15 @@ Claude virtualizes long histories in the live DOM. Therefore:
 
 Do not replace this structural rule with message-count ratios such as “80 records became 8”. A legitimate active fork may be short while abandoned branches are much larger; conversely, a small response can still have a broken parent chain.
 
+### ChatGPT-specific authority rule
+
+ChatGPT detail responses may contain a `mapping` tree with abandoned edits and regenerated answers. Therefore:
+
+1. A mapping response is verified only when the explicit `current_node` exists and its parent chain reaches a real root without a missing parent or cycle.
+2. A best-effort leaf selected because `current_node` is absent remains diagnostic and unverified.
+3. Older flat `messages` detail responses remain supported as provider API transcripts.
+4. The live DOM is marked unverified and may enrich a verified API transcript with confidently matched rendered media; it cannot replace a failed branch verification.
+
 ## How Each Feature Works
 
 ### 1. Platform Auto-Detection
@@ -113,9 +122,9 @@ Typical flow:
 4. Apply provider-specific source authority rules.
 5. Return the exportable conversation or an explicit failure.
 
-For Claude, API detail is authoritative and the DOM is enrichment-only for archive purposes.
+For Claude and ChatGPT, structurally verified API detail is authoritative and the DOM is enrichment-only for archive purposes.
 
-### 3. Claude Active-Branch Resolution
+### 3. Provider Active-Branch Resolution
 
 Claude API detail may return a tree containing regenerated/abandoned siblings. `resolveClaudeActiveBranch()` selects one branch using, in order:
 
@@ -125,11 +134,13 @@ Claude API detail may return a tree containing regenerated/abandoned siblings. `
 
 A selected chain is accepted only if it reaches a root. Missing parents, cycles, or an explicit leaf that is absent from the payload are treated as integrity failures.
 
+ChatGPT follows the same root-reaching invariant through `resolveChatGptActiveBranch()`, but its explicit `current_node` is required for verification. A missing pointer may still produce a best-effort transcript for diagnostics, never a verified archive.
+
 ### 4. Conversation List Fetching (Bulk)
 
 Bulk history uses provider APIs where available. History completeness is separate from the number of items currently returned.
 
-For providers that expose list metadata, responses may include:
+Provider list responses expose completeness metadata when API pagination or a sidebar fallback can be distinguished:
 
 ```ts
 {
@@ -142,7 +153,7 @@ For providers that expose list metadata, responses may include:
 }
 ```
 
-For Claude specifically, if page 1 succeeds but a later page fails, the items already retrieved may still be shown, but the UI must label the history as **partial**. Sidebar fallback is also explicitly incomplete.
+For Claude specifically, if page 1 succeeds but a later page fails, the items already retrieved may still be shown, but the UI must label the history as **partial**. ChatGPT, DeepSeek, and Grok discard a partially paginated API list and fall back to the visible sidebar. In every provider, sidebar fallback is explicitly incomplete.
 
 ### 5. Rendered Media Enrichment
 
@@ -213,6 +224,8 @@ Scheduled export uses the same exportability contract as manual/bulk export. It 
 
 Provider requests are paced/bounded, run state is persisted, completed exports are deduplicated, and safe aggregate failure categories are retained without storing conversation text in diagnostics.
 
+Scheduled runs also consume provider list metadata. An explicit partial API list or sidebar fallback may export eligible items, but it cannot advance the provider `lastRun` checkpoint because unseen conversations must remain eligible on the next run.
+
 ### 11. Retry Behavior
 
 `parser-runtime.ts` briefly caches deterministic authoritative-detail failures so background hydration loops do not hit the same provider endpoint every ~750 ms.
@@ -247,7 +260,7 @@ npx vitest watch
 Do not document fixed total test counts here; the suite changes frequently. Important regression areas include:
 
 - provider DOM/API parsing
-- Claude active-branch structural validation
+- Claude and ChatGPT active-branch structural validation
 - source verification/exportability
 - partial history pagination
 - virtualized-tail media alignment

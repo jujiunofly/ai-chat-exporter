@@ -11,6 +11,7 @@ import {
   ALL_PLATFORMS,
   classifyScheduledRun,
   shouldAdvanceScheduledLastRun,
+  isScheduledConversationListComplete,
   ScheduledRunBudget,
   clampScheduledPlatformLimit,
   clampScheduledPlatformConcurrency,
@@ -377,6 +378,13 @@ describe('Scheduled Export', () => {
   })
 
   describe('run result classification', () => {
+    it('does not treat a partial API list or sidebar fallback as a complete scan', () => {
+      expect(isScheduledConversationListComplete({ source: 'api', complete: false })).toBe(false)
+      expect(isScheduledConversationListComplete({ source: 'sidebar', complete: true })).toBe(false)
+      expect(isScheduledConversationListComplete({ source: 'api', complete: true })).toBe(true)
+      expect(isScheduledConversationListComplete(undefined)).toBe(true)
+    })
+
     it('advances lastRun only when every attempted export succeeds', () => {
       expect(classifyScheduledRun({ attempted: 2, exported: 2, failed: 0, skipped: 0, listComplete: true })).toBe('success')
       expect(shouldAdvanceScheduledLastRun({ attempted: 2, exported: 2, failed: 0, skipped: 0, listComplete: true })).toBe(true)

@@ -10,16 +10,26 @@ import { registerParserMessageHandler, runParserMain } from '../lib/parser-runti
 import { getGrokConversationId } from '../lib/grok-conversation-url'
 import { fetchGrokConversationDetail, fetchGrokConversationList } from '../lib/grok-api'
 
+interface GrokConversationListMeta extends Record<string, unknown> {
+  source: 'api' | 'sidebar'
+  complete: boolean
+}
+
 /**
  * Grok parser implementation
  */
 export class GrokParser {
   platform = 'grok' as const
   private authenticationRequired = false
+  private conversationListMeta: GrokConversationListMeta = { source: 'sidebar', complete: false }
 
   /** Safe aggregate signal for the scheduled-export status surface. */
   isAuthenticationRequired(): boolean {
     return this.authenticationRequired
+  }
+
+  getConversationListMeta(): GrokConversationListMeta {
+    return { ...this.conversationListMeta }
   }
 
   /**
@@ -92,10 +102,14 @@ export class GrokParser {
    * visible sidebar only when the authenticated API cannot return a list.
    */
   async fetchAllConversations(): Promise<ConversationListItem[]> {
+    this.conversationListMeta = { source: 'sidebar', complete: false }
     try {
       const conversations = await fetchGrokConversationList()
       this.authenticationRequired = false
-      return conversations.length > 0 ? conversations : this.getConversationList()
+      if (conversations.length === 0) return this.getConversationList()
+
+      this.conversationListMeta = { source: 'api', complete: true }
+      return conversations
     } catch (error) {
       if (error instanceof Error && error.message === 'Authentication required') {
         this.authenticationRequired = true

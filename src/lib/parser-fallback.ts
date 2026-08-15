@@ -22,6 +22,21 @@ export function preferMoreCompleteConversation<T extends Conversation | null | u
 
   const domIntegrity = analyzeConversationIntegrity(domConversation)
   const apiIntegrity = analyzeConversationIntegrity(apiConversation)
+  const completenessRank = (conversation: Conversation): number => {
+    if (conversation.sourceCompleteness === 'verified') return 2
+    if (conversation.sourceCompleteness === 'unverified') return 0
+    return 1
+  }
+  const domCompletenessRank = completenessRank(domConversation)
+  const apiCompletenessRank = completenessRank(apiConversation)
+
+  // Provider verification outranks message-shape heuristics. In particular,
+  // a verified one-sided conversation can be legitimate, while a balanced
+  // virtualized DOM tail can still be truncated.
+  if (domCompletenessRank !== apiCompletenessRank) {
+    return apiCompletenessRank > domCompletenessRank ? apiConversation : domConversation
+  }
+
   const domHasAssistant = domIntegrity.assistantCount > 0
   const apiHasAssistant = apiIntegrity.assistantCount > 0
 
