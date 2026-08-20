@@ -8,6 +8,19 @@ import { getGrokConversationId } from '../src/lib/grok-conversation-url'
 const repoRoot = resolve(__dirname, '..')
 
 describe('provider export regressions', () => {
+  it('keeps bulk merge, system theme, and a pin control in the popup', () => {
+    const popup = readFileSync(resolve(repoRoot, 'src/popup.tsx'), 'utf8')
+    const types = readFileSync(resolve(repoRoot, 'src/lib/types.ts'), 'utf8')
+
+    expect(popup).toContain("T('Merge into one file')")
+    expect(popup).toContain('mergeConversationsForExport')
+    expect(popup).toContain('PinIcon')
+    expect(popup).toContain('nextTheme')
+    expect(popup).toContain('getProviderTab')
+    expect(types).toContain("export type ThemePreference = 'light' | 'dark' | 'system'")
+    expect(types).toContain('mergeBulkExport: boolean')
+  })
+
   it('renders an explicit checkmark for selected bulk rows', () => {
     const css = readFileSync(resolve(repoRoot, 'src/styles/popup.css'), 'utf8')
 

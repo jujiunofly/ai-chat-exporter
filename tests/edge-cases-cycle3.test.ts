@@ -8,29 +8,7 @@ import { conversationToMarkdown, generateMarkdownFilename } from '../src/lib/exp
 import { conversationToHtml } from '../src/lib/export-pdf'
 import { inferClaudeArtifactType } from '../src/lib/claude-artifact'
 import type { Conversation, ExportOptions, ConversationArtifact, ChatMessage } from '../src/lib/types'
-
-// ─── Re-implement detectPlatformFromUrl from popup.tsx (mirrors production logic exactly) ───
-function detectPlatformFromUrl(url: string): 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok' | null {
-  try {
-    const parsed = new URL(url)
-    if (parsed.hostname === 'chatgpt.com' || parsed.hostname === 'chat.openai.com') {
-      return 'chatgpt'
-    }
-    if (parsed.hostname === 'gemini.google.com') {
-      return 'gemini'
-    }
-    if (parsed.hostname === 'claude.ai') {
-      return 'claude'
-    }
-    if (parsed.hostname === 'deepseek.com' || parsed.hostname === 'chat.deepseek.com') {
-      return 'deepseek'
-    }
-    if (parsed.hostname === 'grok.com' || parsed.hostname === 'www.grok.com') {
-      return 'grok'
-    }
-  } catch {}
-  return null
-}
+import { detectPlatformFromUrl } from '../src/lib/platform'
 
 // ─── Re-implement buildDownloadFilename from popup.tsx ───
 type DownloadFolderOption = 'default' | 'by-platform' | 'custom'

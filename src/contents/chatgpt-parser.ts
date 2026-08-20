@@ -5,7 +5,7 @@
 import type { Conversation, ChatMessage, ConversationListItem, Attachment } from '../lib/types'
 import { generateId, extractTextContent, extractTextWithMedia, extractCodeBlocks, extractImages, cleanText } from '../lib/dom-utils'
 import { registerParserMessageHandler, runParserMain } from '../lib/parser-runtime'
-import { isProviderRateLimitError, isRateLimitedResponse, ProviderRateLimitError } from '../lib/provider-rate-limit'
+import { isProviderRateLimitError, isRateLimitedResponse, payloadLooksRateLimited, ProviderRateLimitError } from '../lib/provider-rate-limit'
 
 function chatGptTimestamp(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -29,11 +29,53 @@ function chatGptModelName(...values: unknown[]): string | undefined {
   return undefined
 }
 
+/** Matches the live ChatGPT sidebar page size. Larger bursts trigger history locks. */
+const CHATGPT_LIST_PAGE_SIZE = 28
+/** Minimum gap between ChatGPT API reads. Tests skip the wait. */
+const CHATGPT_REQUEST_GAP_MS = (globalThis as { process?: { env?: { VITEST?: string } } }).process?.env?.VITEST
+  ? 0
+  : 3000
+
+function wait(ms: number): Promise<void> {
+  return ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : Promise.resolve()
+}
+
+function chatGptLooksRateLimited(status: number, data: unknown): boolean {
+  return status === 429 || payloadLooksRateLimited(data)
+}
+
+async function readChatGptBody(response: { json?: () => Promise<unknown>; text?: () => Promise<string> }): Promise<unknown> {
+  if (typeof response.text === 'function') {
+    const text = await response.text()
+    if (!text) return null
+    try { return JSON.parse(text) } catch { return text }
+  }
+  if (typeof response.json === 'function') return response.json()
+  return null
+}
+
 const CHATGPT_CANONICAL_ORIGIN = 'https://chatgpt.com'
 const CHATGPT_ALLOWED_ORIGINS = new Set([
   CHATGPT_CANONICAL_ORIGIN,
+  'https://www.chatgpt.com',
   'https://chat.openai.com'
 ])
+
+function chatGptConversationIdFromHref(href: string): string | null {
+  const match = href.match(/\/c\/([a-zA-Z0-9_-]{8,})/)
+  return match?.[1] ?? null
+}
+
+function chatGptListItems(data: any): any[] {
+  if (Array.isArray(data?.items)) return data.items
+  if (Array.isArray(data?.conversations)) return data.conversations
+  if (Array.isArray(data?.data?.items)) return data.data.items
+  if (Array.isArray(data?.data?.conversations)) return data.data.conversations
+  if (Array.isArray(data?.data) && data.data.every((item: unknown) => item && typeof item === 'object')) {
+    return data.data
+  }
+  return []
+}
 
 export type ChatGptBranchIssue =
   | 'current_node_missing'
@@ -53,6 +95,7 @@ interface ChatGptConversationListMeta extends Record<string, unknown> {
   source: 'api' | 'sidebar'
   complete: boolean
   pagesFetched?: number
+  rateLimited?: boolean
 }
 
 /**
@@ -138,7 +181,9 @@ function resolveChatGptOrigin(currentOrigin: unknown): string {
 export class ChatGPTParser {
   platform = 'chatgpt' as const
   private accessToken: string | null = null
+  private accountId: string | null = null
   private authenticationRequired = false
+  private nextRequestAt = 0
   private conversationListMeta: ChatGptConversationListMeta = { source: 'sidebar', complete: false }
   private readonly apiOrigin: string
   private readonly legacyTokenCleanup: Promise<void>
@@ -197,10 +242,8 @@ export class ChatGPTParser {
     }
 
     // 2. Try to find the title in the sidebar link matching current conversation URL
-    const currentPath = window.location.pathname
-    const match = currentPath.match(/\/c\/([a-f0-9-]+)/)
-    if (match) {
-      const convId = match[1]
+    const convId = chatGptConversationIdFromHref(window.location.pathname)
+    if (convId) {
       const sidebarLinks = document.querySelectorAll('a[href*="/c/"]')
       for (const link of sidebarLinks) {
         const href = link.getAttribute('href') || ''
@@ -238,8 +281,7 @@ export class ChatGPTParser {
       }
       
       // Extract real conversation ID from URL (e.g., /c/abc-123-def)
-      const urlMatch = window.location.pathname.match(/\/c\/([a-f0-9-]+)/)
-      const conversationId = urlMatch?.[1] || generateId()
+      const conversationId = chatGptConversationIdFromHref(window.location.pathname) || generateId()
 
       return {
         id: conversationId,
@@ -278,13 +320,55 @@ export class ChatGPTParser {
       throw new Error('Authentication required')
     }
     const data = await response.json()
-    if (typeof data.accessToken !== 'string' || !data.accessToken) {
+    const token = [
+      data?.accessToken,
+      data?.access_token,
+      data?.user?.accessToken,
+      data?.account?.accessToken,
+    ].find(value => typeof value === 'string' && value)
+    const accountId = [
+      data?.account?.id,
+      data?.user?.chatgpt_account_id,
+      data?.user?.chatgptAccountId,
+      data?.account?.account_id,
+    ].find(value => typeof value === 'string' && value)
+    if (typeof accountId === 'string') this.accountId = accountId
+    if (typeof token !== 'string' || !token) {
       throw new Error('No access token in response')
     }
 
-    this.accessToken = data.accessToken
+    this.accessToken = token
     this.authenticationRequired = false
     return this.accessToken
+  }
+
+  private deviceId(): string | null {
+    try {
+      const stored = window.localStorage?.getItem('oai-did')
+      if (stored) return stored
+    } catch {}
+    try {
+      const match = document.cookie.match(/(?:^|; )oai-did=([^;]+)/)
+      if (match?.[1]) return decodeURIComponent(match[1])
+    } catch {}
+    return null
+  }
+
+  private conversationAuthHeaders(token: string | null): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Accept': 'application/json',
+      'oai-language': 'en-US',
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': 'same-origin',
+    }
+    if (token) {
+      headers.Authorization = 'Bearer ' + token
+      if (this.accountId) headers['Chatgpt-Account-Id'] = this.accountId
+      const deviceId = this.deviceId()
+      if (deviceId) headers['oai-device-id'] = deviceId
+    }
+    return headers
   }
 
   /**
@@ -292,6 +376,13 @@ export class ChatGPTParser {
    */
   private async resetAccessToken(): Promise<void> {
     this.accessToken = null
+  }
+
+  private async paceChatGptRequest(): Promise<void> {
+    const now = Date.now()
+    const startAt = Math.max(now, this.nextRequestAt)
+    this.nextRequestAt = startAt + CHATGPT_REQUEST_GAP_MS
+    if (startAt > now) await wait(startAt - now)
   }
 
   /**
@@ -302,101 +393,122 @@ export class ChatGPTParser {
     const conversations: ConversationListItem[] = []
     this.conversationListMeta = { source: 'sidebar', complete: false }
     let offset = 0
-    const limit = 100
+    const limit = CHATGPT_LIST_PAGE_SIZE
     const maxPages = 200
     let hasMore = true
     let pagesFetched = 0
-    let paginationComplete = false
-    let paginationFailed = false
+    let complete = true
+    let apiSucceeded = false
+    let rateLimited = false
     let retries = 0
     const maxRetries = 1
 
-    // Get access token for Authorization header
-    let token = await this.getAccessToken()
+    const stopForRateLimit = () => {
+      if (conversations.length === 0) throw new ProviderRateLimitError()
+      rateLimited = true
+      complete = false
+    }
+
+    const useSidebarFallback = () => {
+      this.conversationListMeta = { source: 'sidebar', complete: false }
+      return this.getConversationList()
+    }
+
+    let token: string | null = null
+    try {
+      token = await this.getAccessToken()
+    } catch (error) {
+      if (isProviderRateLimitError(error)) throw error
+      // ChatGPT still authenticates some list reads with cookies alone.
+    }
 
     while (hasMore && pagesFetched < maxPages) {
       try {
+        await this.paceChatGptRequest()
         const response = await fetch(
           `${this.apiOrigin}/backend-api/conversations?offset=${offset}&limit=${limit}&order=updated`,
           {
             credentials: 'include',
-            headers: {
-              'Accept': 'application/json',
-              'Authorization': 'Bearer ' + token,
-              'oai-language': 'en-US',
-              'sec-fetch-dest': 'empty',
-              'sec-fetch-mode': 'cors',
-              'sec-fetch-site': 'same-origin',
-            }
+            headers: this.conversationAuthHeaders(token)
           }
         )
 
         if (response.status === 401) {
-          // Token expired — reset and get a new one, retry
           if (retries < maxRetries) {
             retries++
             await this.resetAccessToken()
-            token = await this.getAccessToken()
-            continue
+            try {
+              token = await this.getAccessToken()
+              continue
+            } catch (error) {
+              if (isProviderRateLimitError(error)) throw error
+            }
           }
           this.authenticationRequired = true
           console.error('[ChatGPT Parser] Authentication expired')
-          paginationFailed = true
+          complete = false
           break
         }
 
-        if (isRateLimitedResponse(response)) {
-          throw new ProviderRateLimitError()
+        const payload = await readChatGptBody(response)
+        if (isRateLimitedResponse(response) || chatGptLooksRateLimited(response.status, payload)) {
+          stopForRateLimit()
+          break
         }
 
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) this.authenticationRequired = true
           console.error(`[ChatGPT Parser] API error: ${response.status}`)
-          paginationFailed = true
+          complete = false
           break
         }
 
-        const data = await response.json()
-        const items = data.items || data.conversations || []
+        const data = payload
+        const items = chatGptListItems(data)
         pagesFetched += 1
+        apiSucceeded = true
+        this.authenticationRequired = false
 
         if (items.length === 0) {
           hasMore = false
-          paginationComplete = true
           break
         }
 
         for (const item of items) {
+          const id = item?.id || item?.conversation_id || item?.conversationId
+          if (typeof id !== 'string' || !id) continue
           conversations.push({
-            id: item.id,
-            title: item.title || 'Untitled Conversation',
-            url: `${this.apiOrigin}/c/${item.id}`,
+            id,
+            title: item.title || item.name || 'Untitled Conversation',
+            url: `${this.apiOrigin}/c/${id}`,
             platform: 'chatgpt',
             messageCount: item.message_count || item.messageCount || undefined,
-            createdAt: item.create_time ? new Date(item.create_time * 1000).getTime() : undefined
+            createdAt: chatGptTimestamp(item.create_time ?? item.update_time)
           })
         }
 
         offset += limit
-
-        // If we got fewer items than the limit, we've reached the end
-        if (items.length < limit) {
-          hasMore = false
-          paginationComplete = true
-        }
+        if (items.length < limit) hasMore = false
       } catch (error) {
         if (isProviderRateLimitError(error)) throw error
         console.error('[ChatGPT Parser] Error fetching conversations:', error)
-        paginationFailed = true
+        complete = false
         break
       }
     }
 
-    if (paginationFailed || !paginationComplete) {
-      return this.getConversationList()
-    }
+    if (pagesFetched >= maxPages && hasMore) complete = false
 
-    this.conversationListMeta = { source: 'api', complete: true, pagesFetched }
+    // A logged-out or header-stripped list call still returns 200 with items: [].
+    // That is not an empty account — fall back to whatever the sidebar can see.
+    if (conversations.length === 0) return useSidebarFallback()
+
+    this.conversationListMeta = {
+      source: 'api',
+      complete,
+      pagesFetched,
+      ...(rateLimited ? { rateLimited: true } : {}),
+    }
     return conversations
   }
 
@@ -406,32 +518,37 @@ export class ChatGPTParser {
    */
   async fetchConversationDetail(id: string): Promise<Conversation | null> {
     try {
-      let token = await this.getAccessToken()
+      let token: string | null = null
+      try {
+        token = await this.getAccessToken()
+      } catch (error) {
+        if (isProviderRateLimitError(error)) throw error
+      }
       let data: any | null = null
 
       for (let attempt = 0; attempt < 2; attempt++) {
+        await this.paceChatGptRequest()
         const response = await fetch(
           `${this.apiOrigin}/backend-api/conversation/${id}`,
           {
             credentials: 'include',
-            headers: {
-              'Accept': 'application/json',
-              'Authorization': 'Bearer ' + token,
-              'oai-language': 'en-US',
-              'sec-fetch-dest': 'empty',
-              'sec-fetch-mode': 'cors',
-              'sec-fetch-site': 'same-origin',
-            }
+            headers: this.conversationAuthHeaders(token)
           }
         )
 
         if (response.status === 401 && attempt === 0) {
           await this.resetAccessToken()
-          token = await this.getAccessToken()
+          try {
+            token = await this.getAccessToken()
+          } catch (error) {
+            if (isProviderRateLimitError(error)) throw error
+            token = null
+          }
           continue
         }
 
-        if (isRateLimitedResponse(response)) {
+        const payload = await readChatGptBody(response)
+        if (isRateLimitedResponse(response) || chatGptLooksRateLimited(response.status, payload)) {
           throw new ProviderRateLimitError()
         }
 
@@ -440,7 +557,7 @@ export class ChatGPTParser {
           return null
         }
 
-        data = await response.json()
+        data = payload
         break
       }
 
@@ -516,7 +633,7 @@ export class ChatGPTParser {
       }
 
       return {
-        id: data.id || id,
+        id: data.id || data.conversation_id || id,
         title: data.title || this.getConversationTitle(),
         url: `${this.apiOrigin}/c/${id}`,
         messages,
@@ -765,6 +882,7 @@ export class ChatGPTParser {
       'aside a[href*="/c/"]',
       '[class*="sidebar"] a[href*="/c/"]',
       '[class*="nav"] a[href*="/c/"]',
+      'a[href*="/c/"]',
       'a[href^="/c/"]'
     ]
     
@@ -775,10 +893,8 @@ export class ChatGPTParser {
         const href = link.getAttribute('href')
         if (!href) return
         
-        const match = href.match(/\/c\/([a-f0-9-]+)/)
-        if (!match) return
-        
-        const id = match[1]
+        const id = chatGptConversationIdFromHref(href)
+        if (!id) return
         if (seen.has(id)) return
         
         const title = extractTextContent(link) || 'Untitled Conversation'
@@ -804,14 +920,14 @@ const parser = new ChatGPTParser()
 
 // Export for content script
 export const config = {
-  matches: ['https://chatgpt.com/*', 'https://chat.openai.com/*']
+  matches: ['https://chatgpt.com/*', 'https://www.chatgpt.com/*', 'https://chat.openai.com/*']
 }
 
 // Register the shared popup-message handler (see src/lib/parser-runtime.ts)
 registerParserMessageHandler({
   platform: 'chatgpt',
   parser,
-  extractConversationId: url => url.match(/\/c\/([a-f0-9-]+)/)?.[1] ?? null,
+  extractConversationId: url => url.match(/\/c\/([a-zA-Z0-9_-]{8,})/)?.[1] ?? null,
   requireApiDetailForCurrentExport: true,
   preferApiDetailWhenComplete: true,
   apiDetailUnavailableError:

@@ -17,8 +17,8 @@ import { downloadMarkdownFile, finalizeExport } from '../lib/export-download'
 import { analyzeConversationIntegrity, conversationIntegrityError, isConversationExportable } from '../lib/conversation-integrity'
 import { t, type Locale } from '../lib/i18n'
 import { useFullPageScroll } from '../lib/use-full-page-scroll'
-import { useThemeSync } from '../lib/use-theme-sync'
-import { DownloadIcon, SunIcon, MoonIcon } from '../components/icons'
+import { nextTheme, resolveTheme, useThemeSync } from '../lib/use-theme-sync'
+import { DownloadIcon, SunIcon, MoonIcon, SystemThemeIcon } from '../components/icons'
 
 type PreviewMode = 'rendered' | 'markdown'
 
@@ -103,7 +103,7 @@ export default function Preview() {
   const [markdownContent, setMarkdownContent] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [theme, setTheme] = useState<'light' | 'dark'>('light')
+  const [theme, setTheme] = useState<ExtensionSettings['theme']>('system')
   const [locale, setLocale] = useState<Locale>('en')
   const [feedback, setFeedback] = useState<string | null>(null)
   const [settings, setSettings] = useState<ExtensionSettings>(DEFAULT_SETTINGS)
@@ -219,7 +219,7 @@ export default function Preview() {
    * Toggle theme and persist it like popup/options do
    */
   const toggleTheme = async () => {
-    const next: ExtensionSettings['theme'] = theme === 'dark' ? 'light' : 'dark'
+    const next = nextTheme(theme)
     setTheme(next)
     const updated = { ...settings, theme: next }
     setSettings(updated)
@@ -342,10 +342,10 @@ export default function Preview() {
           <button
             className="btn btn-icon"
             onClick={toggleTheme}
-            title={T('Toggle Theme')}
-            aria-label={T('Toggle Theme')}
+            title={theme === 'system' ? T('Follow System') : T('Toggle Theme')}
+            aria-label={theme === 'system' ? T('Follow System') : T('Toggle Theme')}
           >
-            {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+            {theme === 'system' ? <SystemThemeIcon /> : resolveTheme(theme) === 'dark' ? <SunIcon /> : <MoonIcon />}
           </button>
           <button
             className="btn btn-outline btn-header"

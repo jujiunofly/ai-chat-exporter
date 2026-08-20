@@ -91,6 +91,17 @@ export function conversationToMarkdown(
   return lines.join('\n')
 }
 
+/** Join several transcripts into one Markdown document for merged bulk export. */
+export function conversationsToMarkdown(
+  conversations: Conversation[],
+  options: ExportOptions
+): string {
+  return conversations
+    .map(conversation => conversationToMarkdown(conversation, options).trimEnd())
+    .filter(Boolean)
+    .join('\n\n---\n\n') + '\n'
+}
+
 /**
  * Generate the metadata header
  * @param conversation - The conversation

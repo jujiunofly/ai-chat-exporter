@@ -209,6 +209,9 @@ export const FILENAME_OPTIONS: FilenameOption[] = [
  */
 export type DownloadFolderOption = 'default' | 'by-platform' | 'custom'
 
+/** Popup/options color scheme. `system` tracks `prefers-color-scheme`. */
+export type ThemePreference = 'light' | 'dark' | 'system'
+
 /**
  * Extension settings stored in chrome.storage
  */
@@ -221,8 +224,10 @@ export interface ExtensionSettings {
   includeCodeBlocks: boolean
   /** Whether to include images by default */
   includeImages: boolean
-  /** UI theme */
-  theme: 'light' | 'dark'
+  /** UI theme. `system` follows the OS color scheme. */
+  theme: ThemePreference
+  /** In bulk mode, write one combined file instead of one file per chat. */
+  mergeBulkExport: boolean
   /** Filename pattern template */
   filenamePattern: string
   /** Download folder strategy */
@@ -259,7 +264,8 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   includeMetadata: true,
   includeCodeBlocks: true,
   includeImages: true,
-  theme: 'light',
+  theme: 'system',
+  mergeBulkExport: false,
   locale: 'en',
   filenamePattern: '{date}-{title}',
   downloadFolder: 'default',
@@ -281,7 +287,14 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
 export function mergeExtensionSettings(
   settings?: Partial<ExtensionSettings>
 ): ExtensionSettings {
-  return { ...DEFAULT_SETTINGS, ...(settings || {}) }
+  const merged = { ...DEFAULT_SETTINGS, ...(settings || {}) }
+  if (merged.theme !== 'light' && merged.theme !== 'dark' && merged.theme !== 'system') {
+    merged.theme = DEFAULT_SETTINGS.theme
+  }
+  if (typeof merged.mergeBulkExport !== 'boolean') {
+    merged.mergeBulkExport = DEFAULT_SETTINGS.mergeBulkExport
+  }
+  return merged
 }
 
 /** Supported platforms for scheduled export */

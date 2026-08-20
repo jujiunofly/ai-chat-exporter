@@ -14,7 +14,8 @@ function response(status: number, data: unknown) {
   return {
     status,
     ok: status >= 200 && status < 300,
-    json: async () => data
+    json: async () => data,
+    text: async () => typeof data === 'string' ? data : JSON.stringify(data ?? null)
   }
 }
 
@@ -48,8 +49,8 @@ describe('ChatGPT API authentication', () => {
     expect(storageLocal.set).not.toHaveBeenCalled()
     expect(fetchMock.mock.calls.map(call => call[0])).toEqual([
       'https://chatgpt.com/api/auth/session',
-      'https://chatgpt.com/backend-api/conversations?offset=0&limit=100&order=updated',
-      'https://chatgpt.com/backend-api/conversations?offset=0&limit=100&order=updated'
+      'https://chatgpt.com/backend-api/conversations?offset=0&limit=28&order=updated',
+      'https://chatgpt.com/backend-api/conversations?offset=0&limit=28&order=updated'
     ])
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' })
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ credentials: 'include' })
@@ -68,9 +69,28 @@ describe('ChatGPT API authentication', () => {
 
     expect(fetchMock.mock.calls[0][0]).toBe('https://chat.openai.com/api/auth/session')
     expect(fetchMock.mock.calls[1][0]).toBe(
-      'https://chat.openai.com/backend-api/conversations?offset=0&limit=100&order=updated'
+      'https://chat.openai.com/backend-api/conversations?offset=0&limit=28&order=updated'
     )
     expect(conversations[0].url).toBe('https://chat.openai.com/c/conversation-1')
+  })
+
+  it('still lists conversations when the session has cookies but no bearer token', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { user: { id: 'user-1' } }))
+      .mockResolvedValueOnce(response(200, {
+        items: [{ id: 'cookie-chat', title: 'Cookie listed chat' }]
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const parser = new ChatGPTParser()
+    const conversations = await parser.fetchAllConversations()
+
+    expect(conversations[0]).toEqual(expect.objectContaining({
+      id: 'cookie-chat',
+      title: 'Cookie listed chat'
+    }))
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBeUndefined()
+    expect(parser.getConversationListMeta()).toEqual({ source: 'api', complete: true, pagesFetched: 1 })
   })
 
   it('falls back to the canonical host for an unrecognized origin', async () => {

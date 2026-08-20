@@ -19,6 +19,7 @@ describe('bulk PDF performance contract', () => {
 
   it('settles prefetched failures immediately instead of leaving an unhandled rejection', () => {
     expect(source).toContain('return { error }')
-    expect(source).toContain('if (result.error) throw result.error')
+    expect(source).toContain('if (result.error)')
+    expect(source).toContain('throw result.error')
   })
 })

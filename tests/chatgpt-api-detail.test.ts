@@ -29,7 +29,8 @@ function response(status: number, data: unknown) {
   return {
     status,
     ok: status >= 200 && status < 300,
-    json: async () => data
+    json: async () => data,
+    text: async () => typeof data === 'string' ? data : JSON.stringify(data ?? null)
   }
 }
 
@@ -63,7 +64,7 @@ describe('ChatGPT API detail parser', () => {
     expect(mockChrome.storage.local.set).not.toHaveBeenCalled()
   })
 
-  it('labels a later-page list failure as incomplete and falls back to the sidebar', async () => {
+  it('labels a later-page list failure as incomplete while keeping fetched API rows', async () => {
     const apiItems = Array.from({ length: 100 }, (_, index) => ({
       id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
       title: `API conversation ${index}`
@@ -79,13 +80,13 @@ describe('ChatGPT API detail parser', () => {
     const parser = new ChatGPTParser()
     const conversations = await parser.fetchAllConversations()
 
-    expect(conversations).toEqual([
-      expect.objectContaining({
-        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-        title: 'Visible fallback'
-      })
-    ])
-    expect(parser.getConversationListMeta()).toEqual({ source: 'sidebar', complete: false })
+    expect(conversations).toHaveLength(100)
+    expect(conversations[0]).toEqual(expect.objectContaining({
+      id: '00000000-0000-4000-8000-000000000000',
+      title: 'API conversation 0',
+      platform: 'chatgpt'
+    }))
+    expect(parser.getConversationListMeta()).toEqual({ source: 'api', complete: false, pagesFetched: 1 })
   })
 
   it('retries a detail request with a refreshed token and exports only the active branch', async () => {
@@ -272,6 +273,44 @@ describe('ChatGPT API detail parser', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(new ChatGPTParser().fetchConversationDetail('conversation-id'))
+      .rejects.toBeInstanceOf(ProviderRateLimitError)
+  })
+
+  it('treats ChatGPT history-lock copy as a rate limit and stops paging', async () => {
+    const lock = {
+      detail: 'To prevent chatgpt from sending too many requests, and to ensure data security, we have temporarily restricted your access to chat history. Please wait a few minutes and try again.',
+    }
+    const firstPage = Array.from({ length: 28 }, (_, index) => ({
+      id: `kept-${index}`,
+      title: `Kept ${index}`,
+    }))
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { accessToken: 'token' }))
+      .mockResolvedValueOnce(response(200, { items: firstPage }))
+      .mockResolvedValueOnce(response(200, lock))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const parser = new ChatGPTParser()
+    const conversations = await parser.fetchAllConversations()
+
+    expect(conversations).toHaveLength(28)
+    expect(parser.getConversationListMeta()).toEqual({
+      source: 'api',
+      complete: false,
+      pagesFetched: 1,
+      rateLimited: true,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('throws when the first ChatGPT list page is a history lock', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response(200, { accessToken: 'token' }))
+      .mockResolvedValueOnce(response(200, {
+        error: { message: 'We have temporarily restricted your access to chat history.' },
+      })))
+
+    await expect(new ChatGPTParser().fetchAllConversations())
       .rejects.toBeInstanceOf(ProviderRateLimitError)
   })
 })

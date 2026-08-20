@@ -34,6 +34,8 @@ export interface DeepSeekHistoryPage {
   items: any[]
   nextCursor?: string
   hasMore: boolean
+  nextUpdatedAt?: number
+  nextPinned?: boolean
 }
 
 interface DeepSeekConversationListMeta extends Record<string, unknown> {
@@ -42,12 +44,62 @@ interface DeepSeekConversationListMeta extends Record<string, unknown> {
   pagesFetched?: number
 }
 
+function deepSeekUnixSeconds(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 10_000_000_000 ? Math.floor(value / 1000) : value
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) return numeric > 10_000_000_000 ? Math.floor(numeric / 1000) : numeric
+  }
+  return undefined
+}
+
+/**
+ * Next fetch_page cursor. The live client walks the page in API order and
+ * keeps the oldest (pinned DESC, updated_at DESC) key via touchCursor/eS —
+ * not the globally smallest timestamp, which can stick on an old pinned row
+ * and make every later page replay the first 100 unpinned chats.
+ */
+export function deepSeekHistoryCursor(items: any[]): { pinned: boolean; updatedAt: number } | undefined {
+  let pinned: boolean | null = null
+  let value: number | null = null
+  for (const item of items) {
+    const updatedAt = deepSeekUnixSeconds(item?.updated_at ?? item?.updatedAt)
+    if (updatedAt == null) continue
+    const itemPinned = typeof item?.pinned === 'boolean' ? item.pinned : false
+    const alreadyOlder = pinned !== null && value !== null && (pinned === itemPinned ? value < updatedAt : !pinned)
+    if (alreadyOlder) continue
+    pinned = itemPinned
+    value = updatedAt
+  }
+  if (pinned === null || value === null) return undefined
+  return { pinned, updatedAt: value }
+}
+
+function unwrapDeepSeekPayload(data: any): any {
+  let current = data
+  for (let depth = 0; depth < 5; depth++) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) break
+    if (current.biz_data && typeof current.biz_data === 'object') {
+      current = current.biz_data
+      continue
+    }
+    if (current.data && typeof current.data === 'object' && !Array.isArray(current.data)) {
+      current = current.data
+      continue
+    }
+    break
+  }
+  return current
+}
+
 /** Normalize the several history response envelopes seen in DeepSeek builds. */
 export function parseDeepSeekHistoryPage(data: any): DeepSeekHistoryPage {
-  const envelope = data?.data && !Array.isArray(data.data) ? data.data : data
+  const envelope = unwrapDeepSeekPayload(data)
   const rawItems = Array.isArray(envelope)
     ? envelope
-    : envelope?.items || envelope?.conversations || envelope?.chat_sessions || envelope?.chat_session || envelope?.data || []
+    : envelope?.items || envelope?.conversations || envelope?.chat_sessions || envelope?.chat_session || envelope?.biz_data || envelope?.data || []
   const items = Array.isArray(rawItems) ? rawItems : []
   const nextCursor = [
     envelope?.next_cursor,
@@ -57,11 +109,101 @@ export function parseDeepSeekHistoryPage(data: any): DeepSeekHistoryPage {
     envelope?.cursor,
   ].find(value => typeof value === 'string' && value.length > 0)
   const explicitHasMore = envelope?.has_more ?? envelope?.hasMore ?? envelope?.has_next_page
+  const cursor = deepSeekHistoryCursor(items)
   return {
     items,
     nextCursor,
     hasMore: typeof explicitHasMore === 'boolean' ? explicitHasMore : Boolean(nextCursor),
+    ...(cursor ? { nextUpdatedAt: cursor.updatedAt, nextPinned: cursor.pinned } : {}),
   }
+}
+
+/** DeepSeek keeps the session bearer in localStorage, not a cookie. */
+export function readDeepSeekAccessToken(): string | null {
+  try {
+    const raw = window.localStorage?.getItem('userToken')
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (typeof parsed === 'string' && parsed.trim()) return parsed.trim()
+    if (parsed && typeof parsed.value === 'string' && parsed.value.trim()) return parsed.value.trim()
+  } catch {}
+  return null
+}
+
+function deepSeekClientLocale(): string {
+  const language = typeof navigator !== 'undefined' ? navigator.language : ''
+  return language.toLowerCase().startsWith('zh') ? 'zh_CN' : 'en_US'
+}
+
+function deepSeekRequestHeaders(): Record<string, string> {
+  // Live fetch_page ignores lte_cursor unless the web client headers are present
+  // and then always returns the first 100 sessions.
+  const headers: Record<string, string> = {
+    Accept: '*/*',
+    'x-client-platform': 'web',
+    'x-client-version': '2.3.0',
+    'x-client-bundle-id': 'com.deepseek.chat',
+    'x-client-locale': deepSeekClientLocale(),
+    'x-client-timezone-offset': String(-new Date().getTimezoneOffset() * 60),
+  }
+  const token = readDeepSeekAccessToken()
+  if (token) headers.Authorization = 'Bearer ' + token
+  return headers
+}
+
+function isDeepSeekAuthEnvelope(data: any): boolean {
+  const code = data?.code ?? data?.data?.biz_code
+  return code === 40002 || code === 40003 || code === 40012
+}
+
+function extractDeepSeekMessageText(item: Record<string, unknown>): string {
+  const fragments = Array.isArray(item.fragments) ? item.fragments : []
+  const fromFragments = fragments
+    .filter((fragment): fragment is Record<string, unknown> => !!fragment && typeof fragment === 'object')
+    .filter(fragment => ['REQUEST', 'RESPONSE', 'TEMPLATE_RESPONSE'].includes(String(fragment.type || '')))
+    .map(fragment => typeof fragment.content === 'string' ? fragment.content : '')
+    .map(text => text.trim())
+    .filter(Boolean)
+  if (fromFragments.length > 0) return fromFragments.join('\n\n')
+  return extractApiMessageText(item)
+}
+
+function deepSeekActiveMessageRecords(payload: any): { records: any[]; complete: boolean } {
+  const records = Array.isArray(payload?.chat_messages) && payload.chat_messages.length > 0
+    ? payload.chat_messages
+    : getApiMessageRecords(payload)
+  const byId = new Map<string, any>()
+  for (const record of records) {
+    const id = typeof record?.message_id === 'string' ? record.message_id : typeof record?.id === 'string' ? record.id : null
+    if (id) byId.set(id, record)
+  }
+  const leafId = typeof payload?.chat_session?.current_message_id === 'string'
+    ? payload.chat_session.current_message_id
+    : [...byId.keys()].at(-1)
+  if (!leafId || !byId.has(leafId)) {
+    return { records, complete: records.length > 0 }
+  }
+
+  const chain: any[] = []
+  const seen = new Set<string>()
+  let nodeId: string | null = leafId
+  let complete = true
+  while (nodeId) {
+    if (seen.has(nodeId)) {
+      complete = false
+      break
+    }
+    seen.add(nodeId)
+    const node = byId.get(nodeId)
+    if (!node) {
+      complete = false
+      break
+    }
+    chain.unshift(node)
+    const parent = node.parent_id
+    nodeId = typeof parent === 'string' && parent ? parent : null
+  }
+  return { records: chain, complete }
 }
 
 /**
@@ -165,21 +307,24 @@ export class DeepSeekParser {
     let pagesFetched = 0
 
     try {
-      // Try to fetch conversation history from the sidebar/API
-      // DeepSeek may expose an API at /api/v0/chat/history or similar
+      // Live DeepSeek UI reads GET /api/v0/chat_session/fetch_page with an
+      // lte cursor of { pinned, updated_at }. The retired /chat/history path
+      // 404s and previously left bulk export with an empty sidebar fallback.
+      const pageSize = 100
       const maxPages = 100
-      let cursor = ''
-      let offset = 0
+      let updatedAt: number | null = null
+      let pinned = false
+      let triedExclusiveCursor = false
       const seenCursors = new Set<string>()
       for (let page = 0; page < maxPages; page++) {
         const query = new URLSearchParams()
-        if (cursor) query.set('cursor', cursor)
-        else if (offset > 0) query.set('offset', String(offset))
-        query.set('limit', '100')
-        const response = await fetch(`https://chat.deepseek.com/api/v0/chat/history?${query.toString()}`, {
+        query.set('count', String(pageSize))
+        query.set('lte_cursor.pinned', String(pinned))
+        if (updatedAt !== null) query.set('lte_cursor.updated_at', String(updatedAt))
+        const response = await fetch(`https://chat.deepseek.com/api/v0/chat_session/fetch_page?${query.toString()}`, {
           method: 'GET',
           credentials: 'include',
-          headers: { 'Accept': 'application/json' }
+          headers: deepSeekRequestHeaders()
         })
         if (isRateLimitedResponse(response)) throw new ProviderRateLimitError()
         if (response.status === 401 || response.status === 403) {
@@ -188,33 +333,91 @@ export class DeepSeekParser {
         }
         if (!response.ok) throw new Error(`DeepSeek history request failed: ${response.status}`)
 
+        const payload = await response.json()
+        if (isDeepSeekAuthEnvelope(payload)) {
+          this.authenticationRequired = true
+          throw new Error('DeepSeek history request failed: authentication required')
+        }
+
         this.authenticationRequired = false
 
-        const pageData = parseDeepSeekHistoryPage(await response.json())
+        const pageData = parseDeepSeekHistoryPage(payload)
         pagesFetched += 1
+        let added = 0
         for (const item of pageData.items) {
-          const id = item?.chat_session_id || item?.id
+          const id = item?.id || item?.chat_session_id
           if (typeof id !== 'string' || !id || seen.has(id)) continue
           const title = item.title || item.name || 'Untitled Conversation'
           seen.add(id)
+          added += 1
+          const updated = deepSeekUnixSeconds(item.updated_at ?? item.updatedAt)
+          const created = deepSeekUnixSeconds(item.created_at ?? item.createdAt)
           conversations.push({
             id,
             title,
             url: `https://chat.deepseek.com/a/chat/s/${id}`,
             platform: 'deepseek',
-            createdAt: item.created_at ? new Date(item.created_at).getTime() : undefined
+            createdAt: created
+              ? created * 1000
+              : updated
+                ? updated * 1000
+                : undefined
           })
         }
 
-        if (!pageData.hasMore || pageData.items.length === 0) break
-        if (pageData.nextCursor) {
-          if (seenCursors.has(pageData.nextCursor)) throw new Error('DeepSeek history pagination cursor repeated')
-          seenCursors.add(pageData.nextCursor)
-          cursor = pageData.nextCursor
-        } else {
-          offset += pageData.items.length
+        if (pageData.items.length === 0) break
+
+        const maybeMore = pageData.hasMore === true || pageData.items.length >= pageSize
+        if (added === 0) {
+          // Inclusive lte repeats the last row. Skip that second once; never
+          // walk 1s-at-a-time and never send milliseconds (the client stores
+          // seconds in the query).
+          if (!maybeMore || updatedAt == null || triedExclusiveCursor) {
+            if (maybeMore) paginationFailed = true
+            break
+          }
+          triedExclusiveCursor = true
+          updatedAt -= 1
+          const cursorKey = `${pinned}:${updatedAt}`
+          if (seenCursors.has(cursorKey)) {
+            paginationFailed = true
+            break
+          }
+          seenCursors.add(cursorKey)
+          continue
         }
-        if (page === maxPages - 1) throw new Error('DeepSeek history pagination exceeded safe page limit')
+
+        if (!maybeMore) break
+
+        const nextUpdatedAt = pageData.nextUpdatedAt
+        const nextPinned = pageData.nextPinned ?? pinned
+        if (nextUpdatedAt == null) {
+          paginationFailed = maybeMore
+          break
+        }
+        let nextAt = nextUpdatedAt
+        let nextPin = nextPinned
+        let cursorKey = `${nextPin}:${nextAt}`
+        if (seenCursors.has(cursorKey)) {
+          if (triedExclusiveCursor) {
+            paginationFailed = true
+            break
+          }
+          triedExclusiveCursor = true
+          nextAt -= 1
+          cursorKey = `${nextPin}:${nextAt}`
+          if (seenCursors.has(cursorKey)) {
+            paginationFailed = true
+            break
+          }
+        }
+        seenCursors.add(cursorKey)
+        updatedAt = nextAt
+        pinned = nextPin
+        if (page === maxPages - 1) {
+          paginationFailed = true
+          break
+        }
       }
     } catch (error) {
       if (isProviderRateLimitError(error)) throw error
@@ -222,13 +425,18 @@ export class DeepSeekParser {
       console.error('[DeepSeek Parser] Error fetching conversations:', error)
     }
 
-    // Never present a partially paginated API response as the complete list.
-    // The visible sidebar is a conservative fallback when pagination fails.
-    if (paginationFailed || conversations.length === 0) {
+    if (!paginationFailed && conversations.length === 0) {
+      return this.getConversationList()
+    }
+    if (conversations.length === 0) {
       return this.getConversationList()
     }
 
-    this.conversationListMeta = { source: 'api', complete: true, pagesFetched }
+    this.conversationListMeta = {
+      source: 'api',
+      complete: !paginationFailed,
+      pagesFetched
+    }
     return conversations
   }
 
@@ -237,62 +445,111 @@ export class DeepSeekParser {
    */
   async fetchConversationDetail(id: string): Promise<Conversation | null> {
     try {
-      const response = await fetch(
-        `https://chat.deepseek.com/api/v0/chat/history_messages?chat_session_id=${encodeURIComponent(id)}`,
-        {
-          method: 'GET',
-          credentials: 'include',
-          headers: {
-            'Accept': 'application/json'
-          }
-        }
-      )
+      const data = await this.fetchDeepSeekHistoryMessages(id)
+      if (!data) return null
 
-      if (isRateLimitedResponse(response)) {
-        throw new ProviderRateLimitError()
-      }
-
-      if (!response.ok) {
-        console.error(`[DeepSeek Parser] Failed to fetch conversation ${id}: ${response.status}`)
-        return null
-      }
-
-      const data = await response.json()
-      const items = getApiMessageRecords(data)
+      const payload = unwrapDeepSeekPayload(data)
+      const branch = deepSeekActiveMessageRecords(payload)
+      const items = branch.records.length ? branch.records : getApiMessageRecords(data)
       const messages: ChatMessage[] = []
 
       for (const item of items) {
         const role = normalizeApiMessageRole(item)
         if (role) {
-          const content = extractApiMessageText(item)
+          const content = extractDeepSeekMessageText(item)
           if (content) {
             messages.push({
-              id: typeof item.id === 'string' ? item.id : generateId(),
+              id: typeof item.id === 'string'
+                ? item.id
+                : typeof (item as any).message_id === 'string'
+                  ? (item as any).message_id
+                  : generateId(),
               role,
               content: cleanText(content),
               timestamp: deepSeekTimestamp(
-                item.created_at ?? item.createdAt ?? item.create_time ??
-                (item.message as any)?.created_at
+                item.inserted_at ?? item.created_at ?? item.createdAt ?? item.create_time ??
+                (item.message as any)?.created_at ?? (item as any).timestamp
               )
             })
           }
         }
       }
 
+      if (messages.length === 0) return null
+
+      const session = payload?.chat_session && typeof payload.chat_session === 'object'
+        ? payload.chat_session
+        : payload
+      const title = session?.title || session?.name || data.title || payload?.title || this.getConversationTitle()
+
       return {
         id,
-        title: data.title || this.getConversationTitle(),
+        title,
         url: `https://chat.deepseek.com/a/chat/s/${id}`,
         messages,
-        createdAt: deepSeekTimestamp(data.created_at ?? data.createdAt ?? data.create_time),
-        modelName: deepSeekModelName(data.model, data.model_name, data.modelName, data.model_slug),
-        platform: 'deepseek'
+        createdAt: deepSeekTimestamp(
+          session?.created_at ?? session?.createdAt ?? data.created_at ?? data.createdAt ?? data.create_time
+        ),
+        modelName: deepSeekModelName(
+          session?.model, session?.model_name, data.model, data.model_name, data.modelName, data.model_slug
+        ),
+        platform: 'deepseek',
+        source: 'api',
+        sourceCompleteness: branch.complete ? 'verified' : 'unverified'
       }
     } catch (error) {
       if (isProviderRateLimitError(error)) throw error
       console.error(`[DeepSeek Parser] Error fetching conversation detail:`, error)
       return null
     }
+  }
+
+  private async fetchDeepSeekHistoryMessages(id: string): Promise<any | null> {
+    const headers = {
+      ...deepSeekRequestHeaders(),
+      'Content-Type': 'application/json',
+    }
+    const getUrl = `https://chat.deepseek.com/api/v0/chat/history_messages?chat_session_id=${encodeURIComponent(id)}`
+    const getResponse = await fetch(getUrl, {
+      method: 'GET',
+      credentials: 'include',
+      headers,
+    })
+    if (isRateLimitedResponse(getResponse)) throw new ProviderRateLimitError()
+    if (getResponse.ok) {
+      const payload = await getResponse.json()
+      if (isDeepSeekAuthEnvelope(payload)) {
+        this.authenticationRequired = true
+        return null
+      }
+      this.authenticationRequired = false
+      return payload
+    }
+    if (getResponse.status === 401 || getResponse.status === 403) {
+      this.authenticationRequired = true
+      console.error(`[DeepSeek Parser] Failed to fetch conversation ${id}: ${getResponse.status}`)
+      return null
+    }
+
+    const postResponse = await fetch('https://chat.deepseek.com/api/v0/chat/history_messages', {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify({ chat_session_id: id }),
+    })
+    if (isRateLimitedResponse(postResponse)) throw new ProviderRateLimitError()
+    if (!postResponse.ok) {
+      if (postResponse.status === 401 || postResponse.status === 403) this.authenticationRequired = true
+      console.error(`[DeepSeek Parser] Failed to fetch conversation ${id}: ${postResponse.status}`)
+      return null
+    }
+    const payload = await postResponse.json()
+    if (isDeepSeekAuthEnvelope(payload)) {
+      this.authenticationRequired = true
+      return null
+    }
+    this.authenticationRequired = false
+    return payload
   }
 
   /**

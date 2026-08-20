@@ -16,12 +16,12 @@ function messageArrayFrom(value: unknown, depth = 0): ApiRecord[] {
   }
   if (!isRecord(value)) return []
 
-  for (const key of ['chat_messages', 'messages', 'items', 'data']) {
+  for (const key of ['chat_messages', 'messages', 'items', 'data', 'biz_data']) {
     const result = messageArrayFrom(value[key], depth + 1)
     if (result.length > 0) return result
   }
 
-  for (const key of ['conversation', 'result', 'payload']) {
+  for (const key of ['conversation', 'result', 'payload', 'chat_session']) {
     const result = messageArrayFrom(value[key], depth + 1)
     if (result.length > 0) return result
   }
@@ -63,7 +63,7 @@ function textFromValue(value: unknown, depth = 0): string[] {
   if (!isRecord(value)) return []
 
   const values: string[] = []
-  for (const key of ['text', 'content', 'parts', 'body', 'value', 'delta']) {
+  for (const key of ['text', 'content', 'parts', 'body', 'value', 'delta', 'fragments', 'thinking_content']) {
     if (key in value) values.push(...textFromValue(value[key], depth + 1))
   }
   return values
@@ -77,9 +77,12 @@ export function extractApiMessageText(value: ApiRecord): string {
     value.text,
     value.parts,
     value.body,
+    value.fragments,
+    value.thinking_content,
     nestedMessage?.content,
     nestedMessage?.text,
-    nestedMessage?.parts
+    nestedMessage?.parts,
+    nestedMessage?.fragments
   ]
 
   const unique = Array.from(new Set(candidates.flatMap(candidate => textFromValue(candidate))))

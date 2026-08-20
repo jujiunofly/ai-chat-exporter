@@ -9,23 +9,25 @@ import './styles/popup.css'
 import { ExportButton } from './components/ExportButton'
 import { FormatSelector } from './components/FormatSelector'
 import { ConversationList } from './components/ConversationList'
-import { hasUsableConversation } from './lib/bulk-conversation'
+import { hasUsableConversation, mergeConversationsForExport } from './lib/bulk-conversation'
 import { Toggle } from './components/Toggle'
 import { Pill } from './components/Pill'
 import { ExportOptionsPanel } from './components/ExportOptionsPanel'
 import { InfoTooltip } from './components/InfoTooltip'
-import { SettingsIcon, SunIcon, MoonIcon, GithubChip } from './components/icons'
-import { conversationToMarkdown } from './lib/export-markdown'
+import { SettingsIcon, SunIcon, MoonIcon, SystemThemeIcon, PinIcon, GithubChip } from './components/icons'
+import { conversationToMarkdown, conversationsToMarkdown } from './lib/export-markdown'
 import { exportToPdf } from './lib/export-pdf'
 import { generateFilename, sanitizeFilename } from './lib/filename'
 import { buildDownloadFilename } from './lib/download-path'
 import { downloadMarkdownFile, finalizeExport } from './lib/export-download'
 import { isExportCancelledError, throwIfExportCancelled } from './lib/export-cancel'
+import { isProviderRateLimitError } from './lib/provider-rate-limit'
 import { selectBulkConversations, normalizeBulkSelectionLimit } from './lib/bulk-selection'
 import { analyzeConversationIntegrity, conversationIntegrityError, isConversationExportable } from './lib/conversation-integrity'
 import { t, type Locale } from './lib/i18n'
 import { mergeExtensionSettings } from './lib/types'
-import { useThemeSync } from './lib/use-theme-sync'
+import { nextTheme, useThemeSync } from './lib/use-theme-sync'
+import { detectPlatformFromUrl, getProviderTab, sendTabMessage } from './lib/platform'
 import type { 
   Conversation, ExportFormat, ExtensionSettings, ConversationListItem, 
   BulkExportProgress, ExportOptions
@@ -39,6 +41,7 @@ type ConversationListLoadMeta = {
   complete: boolean
   dateField?: 'last_activity'
   pagesFetched?: number
+  rateLimited?: boolean
 }
 
 function getConversationListLoadMeta(value: unknown): ConversationListLoadMeta | null {
@@ -51,7 +54,8 @@ function getConversationListLoadMeta(value: unknown): ConversationListLoadMeta |
     source: candidate.source,
     complete: candidate.complete,
     ...(candidate.dateField === 'last_activity' ? { dateField: candidate.dateField } : {}),
-    ...(Number.isFinite(candidate.pagesFetched) ? { pagesFetched: candidate.pagesFetched } : {})
+    ...(Number.isFinite(candidate.pagesFetched) ? { pagesFetched: candidate.pagesFetched } : {}),
+    ...(candidate.rateLimited === true ? { rateLimited: true } : {})
   }
 }
 
@@ -70,20 +74,9 @@ const AiIcon = () => (
   </svg>
 )
 
-/**
- * Detect platform from URL
- */
-function detectPlatformFromUrl(url: string): 'chatgpt' | 'gemini' | 'claude' | 'deepseek' | 'grok' | null {
-  try {
-    const parsed = new URL(url)
-    if (parsed.hostname === 'chatgpt.com' || parsed.hostname === 'chat.openai.com') return 'chatgpt'
-    if (parsed.hostname === 'gemini.google.com') return 'gemini'
-    if (parsed.hostname === 'claude.ai') return 'claude'
-    if (parsed.hostname === 'deepseek.com' || parsed.hostname === 'chat.deepseek.com') return 'deepseek'
-    if (parsed.hostname === 'grok.com' || parsed.hostname === 'www.grok.com') return 'grok'
-  } catch {}
-  return null
-}
+const popupSearch = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
+const DETACHED_POPUP = popupSearch.get('detached') === '1'
+const INITIAL_PINNED_TAB_ID = Number(popupSearch.get('tab') || '') || undefined
 
 /**
  * Main Popup component
@@ -119,6 +112,8 @@ export default function Popup() {
   const [bulkSelectionLimit, setBulkSelectionLimit] = useState(100)
   const bulkDateRangeInvalid = Boolean(bulkFromDate && bulkToDate && bulkFromDate > bulkToDate)
   const [exportedConversationIds, setExportedConversationIds] = useState<string[]>([])
+  const [pinnedTabId, setPinnedTabId] = useState<number | undefined>(INITIAL_PINNED_TAB_ID)
+  const [pinningWindow, setPinningWindow] = useState(false)
   const activeExportControllerRef = useRef<AbortController | null>(null)
   const activeBackgroundFetchIdsRef = useRef(new Set<string>())
   const backgroundFetchSequenceRef = useRef(0)
@@ -149,6 +144,11 @@ export default function Popup() {
 
   useThemeSync(settings?.theme)
 
+  useEffect(() => {
+    if (DETACHED_POPUP) document.documentElement.classList.add('detached')
+    return () => document.documentElement.classList.remove('detached')
+  }, [])
+
   const loadSettings = async () => {
     try {
       const result = await chrome.storage.local.get('settings')
@@ -166,8 +166,9 @@ export default function Popup() {
   const detectPlatformAndConversation = async () => {
     let detected: ReturnType<typeof detectPlatformFromUrl> = null
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      const tab = await getProviderTab(pinnedTabId)
       if (!tab?.id || !tab.url) return
+      if (tab.id !== pinnedTabId) setPinnedTabId(tab.id)
 
       detected = detectPlatformFromUrl(tab.url)
       setPlatform(detected)
@@ -180,7 +181,7 @@ export default function Popup() {
 
       // Popup reads are user-facing verification attempts. Bypass the short
       // background cooldown so Refresh actually retries the provider API.
-      const response = await chrome.tabs.sendMessage(tab.id, {
+      const response = await sendTabMessage(tab.id, {
         type: 'PARSE_CONVERSATION',
         data: { forceVerify: true }
       })
@@ -212,8 +213,9 @@ export default function Popup() {
     setConversationListMeta(null)
     setConversationListNotice(null)
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      const tab = await getProviderTab(pinnedTabId)
       if (!tab?.id) return
+      if (tab.id !== pinnedTabId) setPinnedTabId(tab.id)
 
       const applyList = async (list: ConversationListItem[], meta: ConversationListLoadMeta | null) => {
         setConversationList(list)
@@ -223,10 +225,14 @@ export default function Popup() {
       }
 
       try {
-        const response = await chrome.tabs.sendMessage(tab.id, { type: 'FETCH_ALL_CONVERSATIONS' })
+        const response = await sendTabMessage(tab.id, { type: 'FETCH_ALL_CONVERSATIONS' })
         if (Array.isArray(response?.data) && (response.data.length > 0 || response?.meta)) {
           const list = response.data as ConversationListItem[]
-          await applyList(list, getConversationListLoadMeta(response.meta))
+          const meta = getConversationListLoadMeta(response.meta)
+          await applyList(list, meta)
+          if (platform === 'chatgpt' && (meta?.rateLimited || isProviderRateLimitError(response.error))) {
+            setConversationListNotice(T('ChatGPT locked chat history after too many requests. Wait 5–10 minutes. Do not Refresh or scroll ChatGPT history until then.'))
+          }
           return
         }
         if (response?.error && platform === 'gemini') {
@@ -235,18 +241,27 @@ export default function Popup() {
               ? T('Gemini is rate limiting this history request. Showing only current sidebar items.')
               : T('Gemini history request failed. Showing only current sidebar items.')
           )
+        } else if (response?.error && platform === 'chatgpt') {
+          setConversationListNotice(
+            isProviderRateLimitError(response.error)
+              ? T('ChatGPT locked chat history after too many requests. Wait 5–10 minutes. Do not Refresh or scroll ChatGPT history until then.')
+              : T('ChatGPT history request failed. Showing only current sidebar items.')
+          )
+          if (isProviderRateLimitError(response.error)) return
         } else if (response?.error && platform === 'claude') {
           setConversationListNotice(`Claude history request failed: ${String(response.error)}`)
         }
       } catch {
         if (platform === 'gemini') {
           setConversationListNotice(T('Gemini history request failed. Showing only current sidebar items.'))
+        } else if (platform === 'chatgpt') {
+          setConversationListNotice(T('ChatGPT history request failed. Showing only current sidebar items.'))
         } else if (platform === 'claude') {
           setConversationListNotice('Claude full history could not be loaded. Showing only currently visible sidebar items.')
         }
       }
 
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'FETCH_CONVERSATION_LIST' })
+      const response = await sendTabMessage(tab.id, { type: 'FETCH_CONVERSATION_LIST' })
       if (Array.isArray(response?.data)) {
         const list = response.data as ConversationListItem[]
         await applyList(
@@ -306,7 +321,7 @@ export default function Popup() {
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conversation.title)) {
       let betterTitle = ''
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+        const tab = await getProviderTab(pinnedTabId)
         if (tab?.title) {
           const cleaned = tab.title.replace(/\s*[-–|]\s*(ChatGPT|Claude|Gemini|DeepSeek|Grok).*$/i, '').trim()
           if (cleaned && cleaned.length > 0 && !['ChatGPT', 'Claude', 'Gemini', 'DeepSeek', 'Grok'].includes(cleaned)) {
@@ -381,7 +396,7 @@ export default function Popup() {
       setStoppingExport(false)
       setLoading(false)
     }
-  }, [conversation, format, settings])
+  }, [conversation, format, settings, pinnedTabId])
 
   /** Handle bulk export. */
   const handleBulkExport = useCallback(async () => {
@@ -419,8 +434,9 @@ export default function Popup() {
     })
 
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      const tab = await getProviderTab(pinnedTabId)
       if (!tab?.id) throw new Error('No active tab')
+      if (tab.id !== pinnedTabId) setPinnedTabId(tab.id)
 
       const exportOptions: ExportOptions = {
         format,
@@ -446,7 +462,7 @@ export default function Popup() {
         throwIfExportCancelled(controller.signal)
         let directError: string | null = null
         try {
-          const response = await chrome.tabs.sendMessage(tab.id!, {
+          const response = await sendTabMessage(tab.id!, {
             type: 'FETCH_CONVERSATION_DETAIL',
             data: { id: convItem.id, title: convItem.title }
           })
@@ -464,6 +480,11 @@ export default function Popup() {
         // provider outage or authentication failure.
         if (convItem.platform === 'claude') {
           throw new Error(directError || `Could not verify complete Claude content for ${convItem.title || 'this conversation'}`)
+        }
+        // ChatGPT locks conversation history when detail reads overlap. A
+        // background tab would add more of the same API pressure.
+        if (convItem.platform === 'chatgpt') {
+          throw new Error(directError || `Could not load real content for ${convItem.title || 'this conversation'}`)
         }
 
         throwIfExportCancelled(controller.signal)
@@ -496,10 +517,13 @@ export default function Popup() {
         }
       }
 
+      const mergeBulk = settings?.mergeBulkExport ?? false
+      const fetchedConversations: Conversation[] = []
       let currentConversationFetch = startConversationFetch(eligibleConversations[0])
       let completed = 0
       let failed = 0
       let cancelled = false
+      let rateLimited = false
       for (let i = 0; i < eligibleConversations.length; i++) {
         if (controller.signal.aborted) {
           cancelled = true
@@ -516,36 +540,49 @@ export default function Popup() {
             cancelled = true
             break
           }
-          nextConversationFetch = i + 1 < eligibleConversations.length
+          nextConversationFetch = i + 1 < eligibleConversations.length && convItem.platform !== 'chatgpt'
             ? startConversationFetch(eligibleConversations[i + 1])
             : null
-          if (result.error) throw result.error
+          if (result.error) {
+            if (convItem.platform === 'chatgpt' && isProviderRateLimitError(result.error)) {
+              rateLimited = true
+              setError(T('ChatGPT locked chat history after too many requests. Wait 5–10 minutes. Do not Refresh or scroll ChatGPT history until then.'))
+              break
+            }
+            throw result.error
+          }
           if (!result.conversation) throw new Error(`Could not load real content for ${convItem.title || 'this conversation'}`)
 
           const conv = result.conversation
           const integrity = analyzeConversationIntegrity(conv)
           if (!isConversationExportable(conv)) throw new Error(conversationIntegrityError(integrity))
 
-          const baseFilename = settings?.filenamePattern
-            ? generateFilename(settings.filenamePattern, conv, i + 1)
-            : sanitizeFilename(conv.title) || 'conversation'
-
-          let filename: string
-          if (format === 'markdown') {
-            const markdown = conversationToMarkdown(conv, exportOptions)
-            filename = buildDownloadFilename(baseFilename, conv.platform, '.md', downloadFolder, customFolderName)
-            await downloadMarkdownFile(markdown, { filename, saveAs, signal: controller.signal })
+          if (mergeBulk) {
+            fetchedConversations.push(conv)
           } else {
-            filename = buildDownloadFilename(baseFilename, conv.platform, '.pdf', downloadFolder, customFolderName)
-            await exportToPdf(conv, exportOptions, filename, { signal: controller.signal, saveAs })
-          }
+            const baseFilename = settings?.filenamePattern
+              ? generateFilename(settings.filenamePattern, conv, i + 1)
+              : sanitizeFilename(conv.title) || 'conversation'
 
-          await finalizeExport(conv, format, filename, controller.signal)
+            let filename: string
+            if (format === 'markdown') {
+              const markdown = conversationToMarkdown(conv, exportOptions)
+              filename = buildDownloadFilename(baseFilename, conv.platform, '.md', downloadFolder, customFolderName)
+              await downloadMarkdownFile(markdown, { filename, saveAs, signal: controller.signal })
+            } else {
+              filename = buildDownloadFilename(baseFilename, conv.platform, '.pdf', downloadFolder, customFolderName)
+              await exportToPdf(conv, exportOptions, filename, { signal: controller.signal, saveAs })
+            }
+
+            await finalizeExport(conv, format, filename, controller.signal)
+          }
 
           setBulkProgress(prev => ({ ...prev, completed: prev.completed + 1 }))
           completed++
           setExportedConversationIds(previous => previous.includes(conv.id) ? previous : [...previous, conv.id])
-          currentConversationFetch = nextConversationFetch ?? currentConversationFetch
+          currentConversationFetch = nextConversationFetch ?? (i + 1 < eligibleConversations.length
+            ? startConversationFetch(eligibleConversations[i + 1])
+            : currentConversationFetch)
         } catch (err) {
           if (controller.signal.aborted || isExportCancelledError(err)) {
             cancelled = true
@@ -559,7 +596,29 @@ export default function Popup() {
         }
       }
 
-      if (cancelled) {
+      if (!cancelled && mergeBulk && fetchedConversations.length > 0) {
+        const mergedTitle = t('{0} conversations', locale, fetchedConversations.length)
+        const merged = mergeConversationsForExport(fetchedConversations, mergedTitle)
+        const baseFilename = settings?.filenamePattern
+          ? generateFilename(settings.filenamePattern, merged)
+          : sanitizeFilename(merged.title) || 'conversations'
+        let filename: string
+        if (format === 'markdown') {
+          const markdown = conversationsToMarkdown(fetchedConversations, exportOptions)
+          filename = buildDownloadFilename(baseFilename, merged.platform, '.md', downloadFolder, customFolderName)
+          await downloadMarkdownFile(markdown, { filename, saveAs, signal: controller.signal })
+        } else {
+          filename = buildDownloadFilename(baseFilename, merged.platform, '.pdf', downloadFolder, customFolderName)
+          await exportToPdf(merged, exportOptions, filename, { signal: controller.signal, saveAs })
+        }
+        for (const conv of fetchedConversations) {
+          await finalizeExport(conv, format, filename, controller.signal)
+        }
+      }
+
+      if (rateLimited) {
+        setBulkProgress(prev => ({ ...prev, status: completed > 0 ? 'done' : 'error', current: '' }))
+      } else if (cancelled) {
         setBulkProgress(prev => ({ ...prev, status: 'cancelled', current: '' }))
         setSuccess(T('Export stopped. Completed files were kept.'))
       } else if (completed === 0) {
@@ -583,7 +642,7 @@ export default function Popup() {
       setStoppingExport(false)
       setLoading(false)
     }
-  }, [selectedIds, conversationList, format, settings, exportedConversationIds])
+  }, [selectedIds, conversationList, format, settings, exportedConversationIds, pinnedTabId, locale])
 
   const handleOptionChange = async (key: keyof ExtensionSettings, value: any) => {
     if (!settings) return
@@ -638,6 +697,29 @@ export default function Popup() {
     chrome.runtime.openOptionsPage()
   }
 
+  const pinPopupWindow = async () => {
+    if (DETACHED_POPUP) {
+      window.close()
+      return
+    }
+    setPinningWindow(true)
+    try {
+      const tab = await getProviderTab(pinnedTabId)
+      const tabQuery = tab?.id ? `&tab=${tab.id}` : ''
+      await chrome.windows.create({
+        url: chrome.runtime.getURL(`popup.html?detached=1${tabQuery}`),
+        type: 'popup',
+        width: 420,
+        height: 680,
+        focused: true,
+      })
+      window.close()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : T('Export failed'))
+      setPinningWindow(false)
+    }
+  }
+
   const switchToBulk = () => {
     setTabMode('bulk')
     if (conversationList.length === 0) fetchConversationList()
@@ -687,11 +769,13 @@ export default function Popup() {
               ? { message: 'Claude full history could not be loaded. Showing only currently visible sidebar items; refresh to retry.', warning: true }
               : null
           : conversationListMeta && platformLabel
-            ? conversationListMeta.source === 'api'
-              ? conversationListMeta.complete
-                ? { message: `${platformLabel} account history loaded${conversationListMeta.pagesFetched ? ` (${conversationListMeta.pagesFetched} page${conversationListMeta.pagesFetched === 1 ? '' : 's'})` : ''}.`, warning: false }
-                : { message: `${platformLabel} returned a partial history. The count shown is not complete; refresh to retry.`, warning: true }
-              : { message: `${platformLabel} full history could not be loaded. Showing only currently visible sidebar items; refresh to retry.`, warning: true }
+            ? conversationListMeta.rateLimited
+              ? { message: T('ChatGPT locked chat history after too many requests. Wait 5–10 minutes. Do not Refresh or scroll ChatGPT history until then.'), warning: true }
+              : conversationListMeta.source === 'api'
+                ? conversationListMeta.complete
+                  ? { message: `${platformLabel} account history loaded${conversationListMeta.pagesFetched ? ` (${conversationListMeta.pagesFetched} page${conversationListMeta.pagesFetched === 1 ? '' : 's'})` : ''}.`, warning: false }
+                  : { message: `${platformLabel} returned a partial history. The count shown is not complete; refresh to retry.`, warning: true }
+                : { message: `${platformLabel} full history could not be loaded. Showing only currently visible sidebar items; refresh to retry.`, warning: true }
             : null
 
   return (
@@ -704,12 +788,22 @@ export default function Popup() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="btn-icon"
-            onClick={() => handleOptionChange('theme', settings?.theme === 'dark' ? 'light' : 'dark')}
-            title={T('Toggle Theme')}
-            aria-label={T('Toggle Theme')}
+            className={`btn-icon${DETACHED_POPUP ? ' pinned' : ''}`}
+            onClick={pinPopupWindow}
+            disabled={pinningWindow}
+            title={DETACHED_POPUP ? T('Unpin window') : T('Pin window')}
+            aria-label={DETACHED_POPUP ? T('Unpin window') : T('Pin window')}
+            aria-pressed={DETACHED_POPUP}
           >
-            {settings?.theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+            <PinIcon filled={DETACHED_POPUP} />
+          </button>
+          <button
+            className="btn-icon"
+            onClick={() => handleOptionChange('theme', nextTheme(settings?.theme))}
+            title={settings?.theme === 'system' ? T('Follow System') : T('Toggle Theme')}
+            aria-label={settings?.theme === 'system' ? T('Follow System') : T('Toggle Theme')}
+          >
+            {settings?.theme === 'system' ? <SystemThemeIcon /> : settings?.theme === 'dark' ? <SunIcon /> : <MoonIcon />}
           </button>
           <button 
             className="btn-icon" 
@@ -908,6 +1002,13 @@ export default function Popup() {
                 description={T('Use the recent export history to avoid duplicate bulk downloads. You can turn this off to intentionally export again.')}
                 checked={settings?.skipAlreadyExported ?? true}
                 onChange={value => handleOptionChange('skipAlreadyExported', value)}
+                disabled={loading || bulkLoading}
+              />
+              <Toggle
+                label={T('Merge into one file')}
+                description={T('Combine selected conversations into a single Markdown or PDF file.')}
+                checked={settings?.mergeBulkExport ?? false}
+                onChange={value => handleOptionChange('mergeBulkExport', value)}
                 disabled={loading || bulkLoading}
               />
             </div>

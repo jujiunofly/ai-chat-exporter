@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { conversationToMarkdown, generateMarkdownFilename } from '../src/lib/export-markdown'
+import { conversationToMarkdown, conversationsToMarkdown, generateMarkdownFilename } from '../src/lib/export-markdown'
 import type { Conversation, ExportOptions } from '../src/lib/types'
 
 describe('Export Markdown', () => {
@@ -35,6 +35,17 @@ describe('Export Markdown', () => {
   })
 
   describe('conversationToMarkdown', () => {
+    it('joins several conversations for merged bulk export', () => {
+      const markdown = conversationsToMarkdown([
+        createConversation({ title: 'Alpha', messages: [{ id: '1', role: 'user', content: 'A' }, { id: '2', role: 'assistant', content: 'B' }] }),
+        createConversation({ id: 'test-conv-2', title: 'Beta', messages: [{ id: '3', role: 'user', content: 'C' }, { id: '4', role: 'assistant', content: 'D' }] }),
+      ], defaultOptions)
+
+      expect(markdown).toContain('# Alpha')
+      expect(markdown).toContain('# Beta')
+      expect(markdown).toContain('---')
+    })
+
     it('should generate markdown with metadata', () => {
       const conv = createConversation()
       const markdown = conversationToMarkdown(conv, defaultOptions)

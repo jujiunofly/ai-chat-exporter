@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasUsableConversation } from '../src/lib/bulk-conversation'
+import { hasUsableConversation, mergeConversationsForExport } from '../src/lib/bulk-conversation'
 
 describe('bulk conversation validation', () => {
   it('accepts a complete conversation whose Gemini ID differs only by c_ prefix', () => {
@@ -32,5 +32,45 @@ describe('bulk conversation validation', () => {
       id: 'requested-chat',
       messages: [{ id: 'm1', role: 'user', content: '   ' }]
     }, 'requested-chat')).toBe(false)
+  })
+
+  it('merges verified conversations while keeping each title as a heading', () => {
+    const merged = mergeConversationsForExport([
+      {
+        id: 'one',
+        title: 'First chat',
+        url: 'https://chatgpt.com/c/one',
+        platform: 'chatgpt',
+        source: 'api',
+        sourceCompleteness: 'verified',
+        messages: [
+          { id: 'u1', role: 'user', content: 'Q1' },
+          { id: 'a1', role: 'assistant', content: 'A1' },
+        ],
+      },
+      {
+        id: 'two',
+        title: 'Second chat',
+        url: 'https://chatgpt.com/c/two',
+        platform: 'chatgpt',
+        source: 'api',
+        sourceCompleteness: 'verified',
+        messages: [
+          { id: 'u2', role: 'user', content: 'Q2' },
+          { id: 'a2', role: 'assistant', content: 'A2' },
+        ],
+      },
+    ], '2 conversations')
+
+    expect(merged.title).toBe('2 conversations')
+    expect(merged.sourceCompleteness).toBe('verified')
+    expect(merged.messages.map(message => [message.role, message.content])).toEqual([
+      ['system', 'First chat'],
+      ['user', 'Q1'],
+      ['assistant', 'A1'],
+      ['system', 'Second chat'],
+      ['user', 'Q2'],
+      ['assistant', 'A2'],
+    ])
   })
 })

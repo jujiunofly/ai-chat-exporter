@@ -4,22 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-
-/**
- * Detect platform from URL (mirrors the logic in popup.tsx)
- */
-function detectPlatformFromUrl(url: string): 'chatgpt' | 'gemini' | null {
-  try {
-    const parsed = new URL(url)
-    if (parsed.hostname === 'chatgpt.com' || parsed.hostname === 'chat.openai.com') {
-      return 'chatgpt'
-    }
-    if (parsed.hostname === 'gemini.google.com') {
-      return 'gemini'
-    }
-  } catch {}
-  return null
-}
+import { detectPlatformFromUrl } from '../src/lib/platform'
 
 /**
  * Build download filename with folder prefix
@@ -52,6 +37,10 @@ describe('Platform Detection', () => {
   describe('detectPlatformFromUrl', () => {
     it('should detect ChatGPT from chatgpt.com', () => {
       expect(detectPlatformFromUrl('https://chatgpt.com/c/abc123')).toBe('chatgpt')
+    })
+
+    it('should detect ChatGPT from www.chatgpt.com', () => {
+      expect(detectPlatformFromUrl('https://www.chatgpt.com/c/abc123')).toBe('chatgpt')
     })
 
     it('should detect ChatGPT from chat.openai.com', () => {
