@@ -19,6 +19,23 @@ export const MoonIcon = ({ size = 16 }: { size?: number }) => (
   </svg>
 )
 
+/** Monitor icon (follow the OS color scheme) */
+export const SystemThemeIcon = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+    <line x1="8" y1="21" x2="16" y2="21"></line>
+    <line x1="12" y1="17" x2="12" y2="21"></line>
+  </svg>
+)
+
+/** Pin / keep-open nail */
+export const PinIcon = ({ size = 16, filled = false }: { size?: number; filled?: boolean }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 17v5"></path>
+    <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"></path>
+  </svg>
+)
+
 /** Info icon (ⓘ) used by InfoTooltip triggers */
 export const InfoIcon = ({ size = 16 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -53,6 +70,9 @@ export const SettingsGearIcon = ({ size = 22 }: { size?: number }) => (
   </svg>
 )
 
+export const GITHUB_REPO_URL = 'https://github.com/jujiunofly/ai-chat-exporter'
+export const GITHUB_REPO_SLUG = 'github.com/jujiunofly/ai-chat-exporter'
+
 /**
  * GitHub repository link chip shared by the popup header and the options
  * About card. Callers own the title/label text (localized or not).
@@ -71,7 +91,7 @@ export const GithubChip = ({
   style?: CSSProperties
 }) => (
   <a
-    href="https://github.com/pinguarmy/ai-chat-exporter"
+    href={GITHUB_REPO_URL}
     target="_blank"
     rel="noopener noreferrer"
     className="github-chip"

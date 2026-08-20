@@ -11,7 +11,7 @@ import { Toggle } from './components/Toggle'
 import { Section } from './components/Section'
 import { InfoTooltip } from './components/InfoTooltip'
 import { FilenameEditor } from './components/FilenameEditor'
-import { SunIcon, MoonIcon, SettingsGearIcon, GithubChip } from './components/icons'
+import { SunIcon, MoonIcon, SystemThemeIcon, SettingsGearIcon, GithubChip, GITHUB_REPO_SLUG } from './components/icons'
 import type {
   ExtensionSettings,
   ExportFormat,
@@ -40,7 +40,7 @@ import {
 } from './lib/scheduled-export'
 import { t, localeTag, type Locale } from './lib/i18n'
 import { useFullPageScroll } from './lib/use-full-page-scroll'
-import { useThemeSync } from './lib/use-theme-sync'
+import { nextTheme, useThemeSync } from './lib/use-theme-sync'
 
 /** App version pulled from the extension manifest (single source of truth) */
 const APP_VERSION = chrome.runtime.getManifest()?.version ?? '1.2.0'
@@ -382,11 +382,11 @@ export default function Options() {
         <div className="options-hero-actions">
           <button
             className="btn-icon"
-            onClick={() => updateSetting('theme', settings.theme === 'dark' ? 'light' : 'dark')}
-            title={T('Toggle Theme')}
-            aria-label={T('Toggle Theme')}
+            onClick={() => updateSetting('theme', nextTheme(settings.theme))}
+            title={settings.theme === 'system' ? T('Follow System') : T('Toggle Theme')}
+            aria-label={settings.theme === 'system' ? T('Follow System') : T('Toggle Theme')}
           >
-            {settings.theme === 'dark' ? <SunIcon size={18} /> : <MoonIcon size={18} />}
+            {settings.theme === 'system' ? <SystemThemeIcon size={18} /> : settings.theme === 'dark' ? <SunIcon size={18} /> : <MoonIcon size={18} />}
           </button>
           <span className="options-version">v{APP_VERSION}</span>
         </div>
@@ -431,6 +431,7 @@ export default function Options() {
           >
             <option value="light">{T('Light Mode')}</option>
             <option value="dark">{T('Dark Mode')}</option>
+            <option value="system">{T('Follow System')}</option>
           </select>
         </div>
 
@@ -1133,7 +1134,7 @@ export default function Options() {
           </div>
           <GithubChip
             title={t('View GitHub Repository', locale)}
-            label="github.com/pinguarmy/ai-chat-exporter"
+            label={GITHUB_REPO_SLUG}
             iconSize={12}
             iconMarginRight="6px"
             style={{ padding: '6px 12px', fontSize: '11px' }}
